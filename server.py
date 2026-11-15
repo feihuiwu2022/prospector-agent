@@ -85,6 +85,14 @@ def find_candidate(data: dict, candidate_id: str) -> dict | None:
     return next((item for item in data["candidates"] if item.get("id") == candidate_id), None)
 
 
+def _count_by(rows: list, key: str) -> dict:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key, "未标记"))
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
 def candidate_view(candidate: dict, profile: dict) -> dict:
     result = dict(candidate)
     refresh_task_statuses(result)
@@ -263,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
                 ],
                 "providerStatus": "MiniMax Agent 可主动搜索公开网页并筛选商品；平台搜索摘要不等于官方 API、实时销量或可购报价。",
             })
+            return
+        if path == "/api/metrics":
+            self.send_json(200, self.build_metrics(data))
             return
         if path == "/api/discovery":
             self.send_json(200, {
@@ -734,6 +745,82 @@ class Handler(BaseHTTPRequestHandler):
                 if run:
                     run.update({"status": "failed", "stage": "failed", "progress": 100, "message": "Agent 运行遇到内部错误，请检查服务并重试。", "completedAt": utc_now(), "updatedAt": utc_now()})
             STORE.update(fail_unexpected)
+
+    def build_metrics(self, data: dict) -> dict:
+        """A retrospective of the local research record.
+
+        These are counts of what happened in this workspace: they describe
+        the process, not the market.  Candidate quality is not a business
+        result.
+        """
+        candidates = data.get("candidates", [])
+        by_status: dict[str, int] = {}
+        by_strategy: dict[str, dict[str, int]] = {}
+        reviews = {"continue": 0, "hold": 0, "reject": 0}
+        reasons: dict[str, int] = {}
+        sources_total = 0
+        without_sources = 0
+        for candidate in candidates:
+            status = str(candidate.get("status", "unknown"))
+            by_status[status] = by_status.get(status, 0) + 1
+            key = candidate.get("strategyTitle") or candidate.get("strategyCode") or "未标记策略"
+            bucket = by_strategy.setdefault(key, {"total": 0, "reject": 0, "continue": 0, "hold": 0})
+            bucket["total"] += 1
+            review = candidate.get("humanReview") or {}
+            decision = review.get("decision")
+            if decision in reviews:
+                reviews[decision] += 1
+                bucket[decision] += 1
+                if decision == "reject" and review.get("reason"):
+                    reasons[review["reason"]] = reasons.get(review["reason"], 0) + 1
+            count = len(candidate.get("evidence") or [])
+            sources_total += count
+            if count == 0:
+                without_sources += 1
+        runs = data.get("discoveryRuns", [])
+        pilot_passed = 0
+        pilot_with_data = 0
+        for candidate in candidates:
+            pilot = candidate.get("pilot") or {}
+            if pilot:
+                pilot_with_data += 1
+                verdict = evaluate_pilot(pilot, data.get("profile", {}).get("pilotThresholds")).get("verdict")
+                if verdict == "达标":
+                    pilot_passed += 1
+        top_reasons = [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(reasons.items(), key=lambda item: item[1], reverse=True)[:5]
+        ]
+        return {
+            "candidates": {
+                "total": len(candidates),
+                "byStatus": by_status,
+                "byStrategy": by_strategy,
+            },
+            "reviews": {
+                **reviews,
+                "rejectReasons": top_reasons,
+            },
+            "evidence": {
+                "totalSources": sources_total,
+                "avgSourcesPerCandidate": round(sources_total / len(candidates), 2) if candidates else 0,
+                "candidatesWithoutSources": without_sources,
+            },
+            "runs": {
+                "total": len(runs),
+                "priceGapRuns": len([run for run in runs if run.get("trigger") == "price_gap_pair" or run.get("mode") == "price_gap"]),
+                "failed": len([run for run in runs if run.get("status") == "failed"]),
+            },
+            "pilot": {
+                "withData": pilot_with_data,
+                "passed": pilot_passed,
+            },
+            "suppliers": {
+                "total": len(data.get("suppliers", [])),
+                "byStatus": _count_by(data.get("suppliers", []), "status"),
+            },
+            "note": "这些数字描述的是本工作台的处理过程，不是市场表现或商业结果。",
+        }
 
     def upsert_supplier(self, body: dict) -> None:
         """Save a shop as a sourcing lead, keeping the latest observed price.

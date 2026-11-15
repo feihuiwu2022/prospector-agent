@@ -98,6 +98,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 ### HTTP 应用
 
 - `GET /api/bootstrap`：候选、会话/运行记录、策略、六阶段、连接器和服务能力状态。
+- `GET /api/metrics`：本地工作台的处理过程统计（候选与运行、来源覆盖、审核分布、淘汰理由、策略留存、小测与货源），不包含任何市场表现结论。
 - `POST /api/agent/discovery`：异步启动自动选品。
 - `POST /api/agent/chat`：按四种模式启动异步会话任务；手动竞品分析输出竞品报告，同品比价输出同配置差价表与差价候选，其他两种模式输出候选。
 - `POST /api/candidates/{id}/review`：记录继续研究、暂缓或淘汰的人工审核决定。

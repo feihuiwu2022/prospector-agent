@@ -282,6 +282,16 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("error", payload)
 
+    def test_metrics_summarise_the_local_record(self) -> None:
+        status, _, body = _get(f"{self.base}/api/metrics")
+        self.assertEqual(status, 200)
+        metrics = json.loads(body)
+        self.assertIn("candidates", metrics)
+        self.assertIn("reviews", metrics)
+        self.assertIn("evidence", metrics)
+        self.assertGreaterEqual(metrics["candidates"]["total"], 0)
+        self.assertIn("rejectReasons", metrics["reviews"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

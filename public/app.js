@@ -174,6 +174,7 @@ function render() {
   else if (state.view === "profile") renderProfile();
   else if (state.view === "discovery") renderDiscovery();
   else if (state.view === "board") renderBoard();
+  else if (state.view === "metrics") renderMetrics();
   else renderHome();
 }
 
@@ -558,7 +559,7 @@ function renderDetail() {
       <button class="back-button" data-action="home" aria-label="返回机会工作台">←</button>
       <div class="detail-symbol">${categoryIcon(candidate.category)}</div>
       <div class="detail-title"><h1>${esc(candidate.name)}</h1><div class="detail-meta"><span>${esc(candidate.category)}</span><span>·</span><span>${esc(candidate.market)}</span><span>·</span><span>${esc(candidate.platform)}</span><span>·</span><span>更新于 ${fmtDate(candidate.updatedAt)}</span></div></div>
-      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.priceGap ? `<button class="button-secondary" data-action="price-gap-pair" data-id="${esc(candidate.id)}">生成价差研究</button>` : ""}<button class="button-quiet" data-action="scan-price-gap" data-id="${esc(candidate.id)}">扫描同品比价</button>${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
+      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.priceGap ? `<button class="button-secondary" data-action="price-gap-pair" data-id="${esc(candidate.id)}">生成价差研究</button>` : ""}<button class="button-quiet" data-action="scan-price-gap" data-id="${esc(candidate.id)}">扫描同品比价</button>${candidate.priceGap ? `<button class="button-quiet" data-action="download-rfq">导出询价单</button>` : ""}${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
     </div>
     <nav class="detail-tabs">${tabs.map(([key, label]) => `<button class="detail-tab ${state.tab === key ? "active" : ""}" data-action="tab" data-tab="${key}">${label}${key === "evidence" && candidate.evidence?.length ? ` <span>${candidate.evidence.length}</span>` : ""}</button>`).join("")}</nav>
     ${tabContent}
@@ -815,6 +816,35 @@ function renderProfit(candidate) {
   </aside></div>`;
 }
 
+function rfqMarkdown(candidate) {
+  const pairing = candidate.priceGap || {};
+  const plan = candidate.scalePlan || {};
+  const checklist = candidate.purchaseChecklist || [];
+  const lines = [];
+  lines.push(`# 询价单 · ${candidate.name}`);
+  lines.push("");
+  lines.push(`- 目标市场 / 平台：${candidate.market || ""} / ${candidate.platform || ""}`);
+  lines.push(`- 采购来源国：${candidate.sourcingCountry || ""}`);
+  lines.push(`- 目标配置：${pairing.sourceVariant || ""}${pairing.sourceColor ? ` · ${pairing.sourceColor}` : ""}`);
+  lines.push(`- 询价渠道（公开页面线索）：${pairing.sourcePlatform || ""}${pairing.sourceSeller ? ` · ${pairing.sourceSeller}` : ""}`);
+  lines.push(`- 公开页面可见参考价：${pairing.sourcePrice ?? "—"} ${pairing.sourceCurrency || ""}（仅作参考，不是承诺价）`);
+  if (plan.complete && (plan.tiers || []).length) {
+    lines.push(`- 预计销量速度：小测实测日均 ${plan.dailyUnits} 件`);
+    lines.push(`- 备货量参考：${plan.tiers.map((tier) => `${tier.label} ${tier.totalUnits} 件`).join("；")}`);
+  }
+  lines.push("");
+  lines.push("## 需要卖家书面回答的问题");
+  const questions = checklist
+    .filter((item) => item.id !== "price_evidence")
+    .map((item, index) => `${index + 1}. ${item.item}（${item.note || ""}）`);
+  lines.push(...questions);
+  lines.push("");
+  lines.push("## 备注");
+  lines.push("- 本询价单由公开页面线索整理，仅用于询价沟通，不构成下单或付款指令。");
+  lines.push("- 规格、包装、MOQ、阶梯价、交期、发票与验货要求以卖家书面答复为准。");
+  return lines.join("\n");
+}
+
 function renderBatchPlan(candidate) {
   const plan = candidate.batchPlan || {};
   const profit = candidate.profit || {};
@@ -926,6 +956,32 @@ function renderProfile() {
   `;
 }
 
+async function renderMetrics() {
+  content.innerHTML = `<div class="page-kicker">Retrospective</div><div class="page-heading"><div><h1>复盘小结</h1><p>本地工作台的处理过程统计，不是市场表现或商业结果。</p></div><button class="button-quiet" data-action="home">返回工作台</button></div><div id="metrics-body"><div class="inline-alert">正在统计本地记录…</div></div>`;
+  try {
+    const metrics = await api("/api/metrics");
+    const body = document.querySelector("#metrics-body");
+    if (!body) return;
+    const strategyRows = Object.entries(metrics.candidates.byStrategy || {}).map(([name, bucket]) => `<tr><td>${esc(name)}</td><td>${bucket.total}</td><td>${bucket.continue || 0}</td><td>${bucket.hold || 0}</td><td>${bucket.reject || 0}</td></tr>`).join("");
+    const reasonRows = (metrics.reviews.rejectReasons || []).map((item) => `<tr><td>${esc(item.reason)}</td><td>${item.count}</td></tr>`).join("");
+    const statusRows = Object.entries(metrics.candidates.byStatus || {}).map(([name, count]) => `<tr><td>${esc(name)}</td><td>${count}</td></tr>`).join("");
+    body.innerHTML = `
+      <div class="source-boundary-grid">
+        <article><b>候选与运行</b><p>候选 ${metrics.candidates.total} 个 · 运行 ${metrics.runs.total} 次（比价 ${metrics.runs.priceGapRuns} 次）· 失败 ${metrics.runs.failed} 次。</p></article>
+        <article><b>证据覆盖</b><p>来源 ${metrics.evidence.totalSources} 条 · 平均每候选 ${metrics.evidence.avgSourcesPerCandidate} 条 · ${metrics.evidence.candidatesWithoutSources} 个候选没有来源。</p></article>
+        <article><b>人工审核</b><p>继续 ${metrics.reviews.continue} · 暂缓 ${metrics.reviews.hold} · 淘汰 ${metrics.reviews.reject}。</p></article>
+        <article><b>小测与货源</b><p>有真实小测数据 ${metrics.pilot.withData} 个（达标 ${metrics.pilot.passed}）· 货源档案 ${metrics.suppliers.total} 家。</p></article>
+      </div>
+      <section class="panel"><div class="panel-head"><h3>按策略的候选与审核结果</h3><small>看哪条策略产出的候选更容易被留下</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>策略</th><th>候选</th><th>继续</th><th>暂缓</th><th>淘汰</th></tr></thead><tbody>${strategyRows || `<tr><td colspan="5">暂无数据</td></tr>`}</tbody></table></div></section>
+      <section class="panel"><div class="panel-head"><h3>淘汰理由分布</h3><small>下一轮发现可以避开这些坑</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>理由</th><th>次数</th></tr></thead><tbody>${reasonRows || `<tr><td colspan="2">还没有淘汰记录</td></tr>`}</tbody></table></div></section>
+      <section class="panel"><div class="panel-head"><h3>候选状态分布</h3></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>状态</th><th>数量</th></tr></thead><tbody>${statusRows || `<tr><td colspan="2">暂无数据</td></tr>`}</tbody></table></div></section>
+      <div class="bottom-note"><span>ⓘ</span><span>${esc(metrics.note || "")}</span></div>`;
+  } catch (error) {
+    const body = document.querySelector("#metrics-body");
+    if (body) body.innerHTML = `<div class="inline-alert">读取统计失败：${esc(error.message)}</div>`;
+  }
+}
+
 function boardBuckets() {
   const buckets = {
     "待我决策": [],
@@ -957,15 +1013,22 @@ function boardBuckets() {
 
 function renderBoard() {
   const buckets = boardBuckets();
+  const markets = [...new Set((state.candidates || []).map((item) => item.market).filter(Boolean))];
+  const filter = state.boardMarket || "";
+  const filtered = {};
+  for (const [name, items] of Object.entries(buckets)) {
+    filtered[name] = filter ? items.filter((item) => (item.market || "") === filter) : items;
+  }
   const block = (title, hint, items) => `<section class="panel"><div class="panel-head"><div><h3>${esc(title)}</h3><small>${esc(hint)}</small></div><span class="connector-count">${items.length}</span></div>${items.length ? `<div class="discovery-run-list">${items.map((candidate) => `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(candidate.category || "研究项目")} · ${esc(candidate.market || "")} / ${esc(candidate.platform || "")}</span><h3>${esc(candidate.name)}</h3></div><time>${fmtDate(candidate.updatedAt)}</time></div><p class="run-signal-note">${esc(boardNote(candidate))}</p><div class="run-signal-metrics"><span>${esc(candidate.status || "")}</span><span>${(candidate.evidence || []).length} 条来源</span><span>${(candidate.workflowStages || []).filter((stage) => stage.status === "completed").length}/6 步完成</span></div><div class="candidate-card-actions"><button class="button-secondary" data-action="open" data-id="${esc(candidate.id)}">查看候选</button></div></article>`).join("")}</div>` : `<div class="table-empty" style="padding:22px"><p>${esc(title)}里暂时没有内容。</p></div>`}</section>`;
   content.innerHTML = `
     <div class="page-kicker">Decision board</div>
     <div class="page-heading"><div><h1>决策看板</h1><p>按“需要你做什么”排列候选：待决策、缺数据、可扩量、暂缓与已淘汰。</p></div><button class="button-quiet" data-action="home">返回工作台</button></div>
-    ${block("待我决策", "证据齐了、等你继续研究或淘汰的候选", buckets["待我决策"])}
-    ${block("缺数据", "流程里还有待补数据或被阻塞的阶段", buckets["缺数据"])}
-    ${block("可扩量", "小测已达标，可以看备货测算", buckets["可扩量"])}
-    ${block("暂缓", "你主动挂起的候选", buckets["暂缓"])}
-    ${block("已淘汰", "已归档或被淘汰的候选，理由留档", buckets["已淘汰"])}
+    <div class="chat-composer-context" style="margin-bottom:12px"><label>按市场筛选<select name="boardMarket" data-change="board-market"><option value="">全部市场</option>${markets.map((market) => `<option value="${esc(market)}" ${filter === market ? "selected" : ""}>${esc(market)}</option>`).join("")}</select></label></div>
+    ${block("待我决策", "证据齐了、等你继续研究或淘汰的候选", filtered["待我决策"])}
+    ${block("缺数据", "流程里还有待补数据或被阻塞的阶段", filtered["缺数据"])}
+    ${block("可扩量", "小测已达标，可以看备货测算", filtered["可扩量"])}
+    ${block("暂缓", "你主动挂起的候选", filtered["暂缓"])}
+    ${block("已淘汰", "已归档或被淘汰的候选，理由留档", filtered["已淘汰"])}
   `;
 }
 
@@ -1158,10 +1221,23 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "discovery") { state.view = "discovery"; state.selectedId = null; render(); return; }
     if (action === "board") { state.view = "board"; state.selectedId = null; render(); return; }
+    if (action === "metrics") { state.view = "metrics"; state.selectedId = null; render(); return; }
     if (action === "new") { showNewModal(); return; }
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
     if (action === "profile") { state.view = "profile"; render(); return; }
+    if (action === "download-rfq") {
+      const candidate = currentCandidate();
+      if (!candidate) return;
+      const blob = new Blob([rfqMarkdown(candidate)], { type: "text/markdown;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${(candidate.name || "rfq").replace(/[\\/:*?"<>|]/g, "-")}-询价单.md`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast("询价单已导出；发给卖家前请自行核对规格与数量。");
+      return;
+    }
     if (action === "apply-calibration") {
       const candidate = currentCandidate();
       if (!candidate) return;
@@ -1532,6 +1608,11 @@ document.addEventListener("change", async (event) => {
     } catch (error) {
       toast(error.message, true);
     }
+    return;
+  }
+  if (target.dataset.change === "board-market") {
+    state.boardMarket = target.value;
+    renderBoard();
     return;
   }
   if (target.dataset.change === "profile-market") {
