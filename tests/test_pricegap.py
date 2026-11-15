@@ -514,8 +514,52 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(landed["perUnitDuty"], 5.0)
         self.assertEqual(landed["perUnitInsurance"], 1.0)
         self.assertEqual(landed["defectCost"], 36.4)
-        self.assertAlmostEqual(landed["landedUnitCost"], 1820 + 36.4 + 10 + 1, places=2)
+        # landed = (goods incl. defect reserve + freight + duty + insurance) / units
+        self.assertAlmostEqual(landed["landedUnitCost"], (1820 * 60 * 1.02 + 600 + 300 + 60) / 60, places=2)
         self.assertEqual(landed["totalGoods"], 109200.0)
+
+    def test_inspection_issues_reduce_sellable_units_and_cost(self) -> None:
+        from prospector.domain import build_landed_cost
+
+        landed = build_landed_cost({
+            "quantity": 60,
+            "unitPrice": 1820,
+            "purchaseCurrency": "CNY",
+            "shippingTotal": 600,
+            "dutyTotal": 300,
+            "insuranceTotal": 60,
+            "defectRate": 0.0,
+            "qcIssues": [
+                {"type": "短装", "quantity": 4, "refundAmount": 7280, "status": "已赔付"},
+                {"type": "破损", "quantity": 2, "refundAmount": 0, "status": "待索赔"},
+            ],
+        })
+        self.assertEqual(landed["lostUnits"], 6)
+        self.assertEqual(landed["usableUnits"], 54)
+        self.assertEqual(landed["refunds"], 7280.0)
+        self.assertEqual(len(landed["openIssues"]), 1)
+        expected = (1820 * 60 + 600 + 300 + 60 - 7280) / 54
+        self.assertAlmostEqual(landed["landedUnitCost"], round(expected, 2), places=2)
+
+    def test_batch_plan_uses_the_real_landed_cost(self) -> None:
+        from prospector.domain import calculate_batch_plan
+
+        assumptions = {
+            "sellingPrice": 2099,
+            "sellingCurrency": "CNY",
+            "purchasePrice": 1820,
+            "purchaseCurrency": "CNY",
+            "referralRate": 0.05,
+            "adCost": 20,
+            "fulfillmentCost": 15,
+            "returnReserveRate": 0.02,
+            "batchQty": 60,
+            "cashCycleDays": 30,
+        }
+        profit = {"complete": True, "currency": "CNY", "contributionProfit": 100.0, "purchasePriceInSellingCurrency": 1820}
+        landed = {"complete": True, "landedUnitCost": 1900.0}
+        plan = calculate_batch_plan(assumptions, profit, landed)
+        self.assertEqual(plan["cashUsed"], 114000.0)
 
     def test_qc_templates_cover_the_candidate_category(self) -> None:
         from prospector.domain import qc_template

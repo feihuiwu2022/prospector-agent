@@ -103,7 +103,11 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["scoreStatus"] = {"complete": score_result["complete"], "missingScores": score_result["missingScores"]}
     result["confidence"] = confidence_for(result)
     result["profit"] = calculate_profit(result.get("assumptions", {}))
-    result["batchPlan"] = calculate_batch_plan(result.get("assumptions", {}), result["profit"])
+    result["batchPlan"] = calculate_batch_plan(
+        result.get("assumptions", {}),
+        result["profit"],
+        ((result.get("actualCost") or {}).get("landed") or {}),
+    )
     result["pilot"] = result.get("pilot") or {}
     result["pilotReview"] = evaluate_pilot(result["pilot"], profile.get("pilotThresholds"))
     result["scalePlan"] = build_scale_plan(result, result["pilotReview"], profile, result["batchPlan"])
@@ -1610,6 +1614,9 @@ class Handler(BaseHTTPRequestHandler):
                     if key == "actualCost":
                         if not isinstance(value, dict):
                             raise ValueError("实际到货成本必须是对象。")
+                        issues = value.get("qcIssues")
+                        if issues is not None and not isinstance(issues, list):
+                            raise ValueError("验货异常必须是列表。")
                         landed = build_landed_cost(value)
                         candidate["actualCost"] = {**value, "landed": landed, "recordedAt": utc_now()}
                         if landed.get("complete"):
@@ -1640,6 +1647,16 @@ class Handler(BaseHTTPRequestHandler):
                                 if str(item.get("id", "")).endswith("_actual"):
                                     item["done"] = True
                                     item["status"] = "已确认"
+                            if landed.get("openIssues"):
+                                candidate.setdefault("purchaseChecklist", []).append({
+                                    "id": f"qc_claim_{str(uuid4())[:8]}",
+                                    "item": "跟进验货异常索赔：" + "、".join(
+                                        f"{issue.get('type')}{issue.get('quantity')} 件" for issue in landed["openIssues"]
+                                    ),
+                                    "status": "待执行",
+                                    "note": "索赔或补货结清后，把状态改为已结清并重新保存到货记录。",
+                                    "done": False,
+                                })
                         candidate["updatedAt"] = utc_now()
                         advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
                         continue

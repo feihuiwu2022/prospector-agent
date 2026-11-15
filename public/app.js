@@ -595,6 +595,22 @@ function renderActualCostPanel(candidate) {
   const checked = new Set(actual.qcChecks || []);
   const checks = template.map((item) => `<label class="check-option" style="display:inline-flex;gap:6px;align-items:flex-start"><input type="checkbox" name="qcChecks" value="${esc(item)}" ${checked.has(item) ? "checked" : ""} /><span>${esc(item)}</span></label>`).join("");
   const numberField = (name, label, unit, step = "0.01") => `<div class="field"><label for="ac-${name}">${esc(label)} <span style="font-weight:400;color:#9ca59e">(${esc(unit)})</span></label><input id="ac-${name}" name="${name}" type="number" min="0" step="${step}" value="${actual[name] == null ? "" : esc(actual[name])}" /></div>`;
+  const issues = Array.isArray(actual.qcIssues) ? actual.qcIssues : [];
+  const issueRows = issues.map((issue, index) => `<tr>
+    <td>${esc(issue.type || "其他")}</td>
+    <td>${issue.quantity ?? "—"}</td>
+    <td>${issue.refundAmount == null ? "—" : Number(issue.refundAmount).toLocaleString("zh-CN")}</td>
+    <td><select data-qc-issue="${index}" name="qcIssueStatus_${index}">${["待索赔", "已赔付", "已补货", "已结清", "已接受"].map((status) => `<option ${issue.status === status ? "selected" : ""}>${status}</option>`).join("")}</select></td>
+    <td>${esc(issue.note || "")}</td>
+  </tr>`).join("");
+  const issueBlock = `<div class="report-list"><b>验货异常</b>${issueRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>类型</th><th>数量</th><th>索赔金额</th><th>状态</th><th>备注</th></tr></thead><tbody>${issueRows}</tbody></table></div>` : `<p style="color:#9aa39b;font-size:9px">还没有登记异常。短装、破损、错发会减少可售数量；已获赔付会从成本里扣掉。</p>`}
+    <div class="form-grid" style="margin-top:10px">
+      <div class="field"><label for="qc-type">类型</label><select id="qc-type" name="qcIssueType"><option>短装</option><option>破损</option><option>错发</option><option>质量问题</option></select></div>
+      ${numberField("qcIssueQuantity", "异常数量", "件", "1")}
+      ${numberField("qcIssueRefund", "索赔金额", "销售币种")}
+      <div class="field"><label for="qc-note">备注</label><input id="qc-note" name="qcIssueNote" placeholder="照片、协商结果等" /></div>
+      <div class="field"><div class="form-actions"><button type="button" class="button-secondary" data-action="add-qc-issue">添加异常</button></div></div>
+    </div></div>`;
   return `<section class="panel"><div class="panel-head"><h3>实际到货与验货</h3><small>到货后录入真实成本，验货项按品类给出</small></div>
     <form id="actual-cost-form" class="form-grid">
       ${numberField("quantity", "实收数量", "件", "1")}
@@ -607,6 +623,7 @@ function renderActualCostPanel(candidate) {
       <div class="field"><label for="ac-receivedAt">到货日期</label><input id="ac-receivedAt" name="receivedAt" type="date" value="${esc(actual.receivedAt || "")}" /></div>
       <div class="field full"><label for="ac-note">备注</label><input id="ac-note" name="note" value="${esc(actual.note || "")}" placeholder="运费、破损、赔付等说明" /></div>
       <div class="field full"><label>验货清单（${esc(candidate.category || "其他")}）</label><div class="check-grid">${checks}</div></div>
+      <div class="field full">${issueBlock}</div>
       <div class="field full"><div class="form-actions"><button type="submit" class="button-secondary">保存并回填利润模型</button></div></div>
     </form>
     ${landed.complete ? `<div class="profit-result"><div class="profit-metric"><span>每件到岸成本</span><b>${Number(landed.landedUnitCost).toLocaleString("zh-CN")} ${esc(landed.purchaseCurrency || "")}</b></div><div class="profit-metric"><span>货值合计</span><b>${Number(landed.totalGoods).toLocaleString("zh-CN")}</b></div><div class="profit-metric"><span>破损预留/件</span><b>${Number(landed.defectCost).toLocaleString("zh-CN")}</b></div></div><small class="chat-result-foot">${esc(landed.note || "")}</small>` : ""}
@@ -1460,6 +1477,25 @@ document.addEventListener("click", async (event) => {
       toast("报价已记录，并同步到货源档案。");
       return;
     }
+    if (action === "add-qc-issue") {
+      const candidate = currentCandidate();
+      if (!candidate) return;
+      const type = String(document.querySelector("#qc-type")?.value || "短装");
+      const quantity = Number(document.querySelector("#qcIssueQuantity")?.value || 0);
+      const refund = Number(document.querySelector("#qcIssueRefund")?.value || 0);
+      const note = String(document.querySelector("#qc-note")?.value || "");
+      const issues = [...(candidate.actualCost?.qcIssues || [])];
+      issues.push({ id: `qc_${Date.now()}`, type, quantity, refundAmount: refund, status: "待索赔", note });
+      await api(`/api/candidates/${encodeURIComponent(candidate.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ actualCost: { ...(candidate.actualCost || {}), qcIssues: issues } }),
+      });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("验货异常已登记，可售数量与成本已重算。");
+      return;
+    }
     if (form.id === "actual-cost-form") {
       const payload = {};
       for (const key of ["quantity", "unitPrice", "shippingTotal", "dutyTotal", "insuranceTotal", "defectRate"]) {
@@ -1470,6 +1506,7 @@ document.addEventListener("click", async (event) => {
       payload.receivedAt = String(data.get("receivedAt") || "").trim();
       payload.note = String(data.get("note") || "").trim();
       payload.qcChecks = data.getAll("qcChecks").map(String);
+      payload.qcIssues = (candidate.actualCost?.qcIssues || []).map((issue) => ({ ...issue }));
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ actualCost: payload }) });
       await refresh();
       state.view = "detail";
@@ -1878,6 +1915,26 @@ document.addEventListener("change", async (event) => {
       state.view = "detail";
       render();
       toast("采购待办已更新，六步流程状态同步推进。");
+    } catch (error) {
+      toast(error.message, true);
+    }
+    return;
+  }
+  if (target.dataset && target.dataset.qcIssue !== undefined && target.dataset.qcIssue !== "") {
+    const candidate = currentCandidate();
+    if (!candidate) return;
+    const issues = (candidate.actualCost?.qcIssues || []).map((issue, index) => (
+      index === Number(target.dataset.qcIssue) ? { ...issue, status: target.value } : issue
+    ));
+    try {
+      await api(`/api/candidates/${encodeURIComponent(candidate.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ actualCost: { ...(candidate.actualCost || {}), qcIssues: issues } }),
+      });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("验货异常状态已更新。");
     } catch (error) {
       toast(error.message, true);
     }

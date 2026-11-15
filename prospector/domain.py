@@ -166,7 +166,7 @@ CROSS_CURRENCY_FIELDS = ("fxRate", "inboundCost", "dutyTaxCost")
 BATCH_FIELDS = ("batchQty", "cashCycleDays")
 
 
-def calculate_batch_plan(assumptions: dict, profit: dict) -> dict:
+def calculate_batch_plan(assumptions: dict, profit: dict, landed: dict | None = None) -> dict:
     """First-batch cash and turnover, derived from the profit scenario.
 
     No sales forecast is invented: the operator states how many units the
@@ -183,6 +183,10 @@ def calculate_batch_plan(assumptions: dict, profit: dict) -> dict:
     if quantity <= 0 or cycle_days <= 0:
         return {"complete": False, "missingFields": missing}
     purchase_in_selling_currency = profit.get("purchasePriceInSellingCurrency")
+    landed = landed or {}
+    if landed.get("complete") and landed.get("landedUnitCost"):
+        # The real landed cost beats the estimate whenever it is recorded.
+        purchase_in_selling_currency = landed["landedUnitCost"]
     if purchase_in_selling_currency is None:
         purchase_in_selling_currency = float(assumptions.get("purchasePrice", 0) or 0)
     cash_used = round(purchase_in_selling_currency * quantity, 2)
@@ -657,9 +661,43 @@ def build_landed_cost(actual: dict) -> dict:
     per_unit_duty = round(duty / quantity, 2)
     per_unit_insurance = round(insurance / quantity, 2)
     defect_cost = round(unit_price * defect_rate, 2)
-    landed = round(unit_price + defect_cost + per_unit_shipping + per_unit_insurance, 2)
+
+    # Inspection findings: short or damaged units reduce what is sellable,
+    # refunds reduce what was paid.
+    issues = actual.get("qcIssues") if isinstance(actual.get("qcIssues"), list) else []
+    lost_units = 0
+    refunds = 0.0
+    open_issues = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        try:
+            issue_qty = float(issue.get("quantity") or 0)
+        except (TypeError, ValueError):
+            issue_qty = 0
+        try:
+            issue_refund = float(issue.get("refundAmount") or 0)
+        except (TypeError, ValueError):
+            issue_refund = 0
+        if str(issue.get("type")) in {"短装", "破损", "错发"}:
+            lost_units += issue_qty
+        refunds += issue_refund
+        if str(issue.get("status", "待索赔")) not in {"已结清", "已赔付", "已补货", "已接受"}:
+            open_issues.append({"type": issue.get("type", "其他"), "quantity": issue_qty, "refundAmount": issue_refund})
+
+    usable_units = max(0.0, quantity - lost_units)
+    total_paid = unit_price * quantity * (1 + defect_rate) + shipping + duty + insurance
+    effective_total = round(total_paid - refunds, 2)
+    if usable_units > 0:
+        landed = round(effective_total / usable_units, 2)
+    else:
+        landed = 0.0
     return {
         "complete": True,
+        "usableUnits": usable_units,
+        "lostUnits": lost_units,
+        "refunds": round(refunds, 2),
+        "openIssues": open_issues,
         "quantity": quantity,
         "unitPrice": unit_price,
         "purchaseCurrency": str(actual.get("purchaseCurrency", "")).upper(),
@@ -669,11 +707,12 @@ def build_landed_cost(actual: dict) -> dict:
         "defectRate": defect_rate,
         "defectCost": defect_cost,
         "landedUnitCost": landed,
+        "totalPaid": round(total_paid, 2),
         "totalGoods": round(unit_price * quantity, 2),
         "totalShipping": shipping,
         "totalDuty": duty,
         "totalInsurance": insurance,
-        "note": "运费、关税与保险按实收数量摊到每件；破损率按你填的比例计入成本。",
+        "note": "运费、关税与保险按实收数量摊到每件；破损率按你填的比例计入成本；验货异常会减少可售数量并扣掉已获赔付。",
     }
 
 
