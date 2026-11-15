@@ -224,6 +224,42 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertAlmostEqual(row["contributionProfit"], round(expected, 2), places=1)
         self.assertEqual(row["purchasePlatform"], "淘宝 / 天猫")
 
+    def test_platform_fees_can_differ_per_platform(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        assumptions = {
+            "referralRate": 0.05,
+            "adCost": 20,
+            "fulfillmentCost": 15,
+            "returnReserveRate": 0.02,
+            "byPlatform": {"jd": {"referralRate": 0.10}},
+        }
+        computed = pricegap.compute_platform_profit(result["groups"], assumptions, "CNY")
+        jd = next(item for item in computed["rows"] if item["platformId"] == "jd")
+        default_only = pricegap.compute_platform_profit(
+            result["groups"],
+            {"referralRate": 0.05, "adCost": 20, "fulfillmentCost": 15, "returnReserveRate": 0.02},
+            "CNY",
+        )
+        jd_default = next(item for item in default_only["rows"] if item["platformId"] == "jd")
+        # A higher commission for this platform lowers its contribution.
+        self.assertLess(jd["contributionProfit"], jd_default["contributionProfit"])
+        expected_jd = 2099 - 1899 - 2099 * 0.10 - 20 - 15 - 2099 * 0.02
+        self.assertAlmostEqual(jd["contributionProfit"], round(expected_jd, 2), places=1)
+
+    def test_purchase_checklist_keeps_unknowns_explicit(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        candidates = pricegap.build_price_gap_candidates(
+            "OPPO K13s", result, {"market": "中国", "sourcingCountry": "中国"}
+        )
+        checklist = candidates[0]["purchaseChecklist"]
+        self.assertTrue(checklist)
+        items = " ".join(item["item"] for item in checklist)
+        self.assertIn("起订量", items)
+        self.assertIn("阶梯价", items)
+        # Every unknown must be marked, never silently assumed.
+        for item in checklist:
+            self.assertIn(item["status"], {"已有线索", "待确认", "待执行"})
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

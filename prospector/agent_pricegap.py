@@ -356,6 +356,7 @@ def _opportunities(groups: list[dict], currency: str) -> list[dict]:
             "sourceTitle": source["title"],
             "sourceColor": source.get("color", ""),
             "sourceSeller": source.get("seller", ""),
+            "sourcePromo": bool(source.get("promoSignals")),
             "targetPlatform": target["platform"],
             "targetPlatformId": target["platformId"],
             "targetPrice": target["priceLow"],
@@ -601,15 +602,25 @@ def gap_history(history: list[dict], config: str, source_platform: str, target_p
 PRICE_GAP_COST_FIELDS = ("referralRate", "adCost", "fulfillmentCost", "returnReserveRate")
 
 
+def _fees_for(platform_id: str, assumptions: dict) -> tuple[dict, list[str]]:
+    """Fees of one platform: per-platform override first, defaults second."""
+    defaults = {key: assumptions.get(key) for key in PRICE_GAP_COST_FIELDS}
+    overrides = (assumptions.get("byPlatform") or {}).get(platform_id) or {}
+    merged = {key: overrides.get(key, defaults.get(key)) for key in PRICE_GAP_COST_FIELDS}
+    missing = [key for key in PRICE_GAP_COST_FIELDS if merged.get(key) in (None, "")]
+    return merged, missing
+
+
 def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str) -> dict:
     """Per selling platform: what a unit would earn on the cheapest source.
 
     The purchase price is the lowest visible price of the same configuration
     across all platforms.  Every fee has to come from the operator; when a
-    fee is missing the row says so instead of assuming zero.
+    fee is missing the row says so instead of assuming zero.  Fees may differ
+    per platform, so a platform can override the default assumption.
     """
-    missing = [key for key in PRICE_GAP_COST_FIELDS if assumptions.get(key) in (None, "")]
     rows = []
+    incomplete = []
     for group in groups:
         if not group.get("comparable"):
             continue
@@ -623,6 +634,7 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
             sell_row = min(platform_rows, key=lambda row: row["priceLow"])
             if sell_row["platformId"] == purchase_row["platformId"]:
                 continue
+            fees, missing = _fees_for(platform_id, assumptions)
             row = {
                 "config": config,
                 "platform": sell_row["platform"],
@@ -630,18 +642,19 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
                 "sellPrice": sell_row["priceLow"],
                 "purchasePrice": purchase_row["priceLow"],
                 "purchasePlatform": purchase_row["platform"],
+                "purchaseSeller": purchase_row.get("seller", ""),
                 "grossGap": round(sell_row["priceLow"] - purchase_row["priceLow"], 2),
                 "currency": currency,
                 "promo": bool(sell_row.get("promoSignals")),
-                "missingFields": list(missing),
+                "missingFields": missing,
                 "contributionProfit": None,
                 "contributionMargin": None,
             }
             if not missing:
-                commission = sell_row["priceLow"] * float(assumptions["referralRate"])
-                returns = sell_row["priceLow"] * float(assumptions["returnReserveRate"])
-                ad_cost = float(assumptions["adCost"])
-                fulfillment = float(assumptions["fulfillmentCost"])
+                commission = sell_row["priceLow"] * float(fees["referralRate"])
+                returns = sell_row["priceLow"] * float(fees["returnReserveRate"])
+                ad_cost = float(fees["adCost"])
+                fulfillment = float(fees["fulfillmentCost"])
                 contribution = sell_row["priceLow"] - purchase_row["priceLow"] - commission - ad_cost - fulfillment - returns
                 row.update({
                     "costs": {
@@ -654,14 +667,16 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
                     "contributionProfit": round(contribution, 2),
                     "contributionMargin": round(contribution / sell_row["priceLow"], 4) if sell_row["priceLow"] else 0.0,
                 })
+            else:
+                incomplete.extend(missing)
             rows.append(row)
-    rows.sort(key=lambda item: item.get("contributionProfit", item["grossGap"]), reverse=True)
+    rows.sort(key=lambda item: item.get("contributionProfit") if item.get("contributionProfit") is not None else item["grossGap"], reverse=True)
     return {
         "rows": rows,
-        "missingFields": missing,
-        "complete": not missing,
+        "missingFields": list(dict.fromkeys(incomplete)),
+        "complete": not incomplete,
         "note": (
-            "每行假设在最低价平台按可见价拿货、在该平台卖出；费用来自经营画像里的比价假设，未填时不给利润。"
+            "每行假设在最低价平台按可见价拿货、在该平台卖出；费用来自经营画像里的比价假设（可按平台单独设置），未填时不给利润。"
         ),
     }
 
@@ -716,6 +731,65 @@ def summarize_price_history(history: list[dict]) -> dict:
     return {"series": series, "alerts": alerts, "threshold": PRICE_ALERT_THRESHOLD}
 
 
+def build_purchase_checklist(product: str, spec: dict) -> list[dict]:
+    """The sourcing to-dos behind a price gap.
+
+    Nothing here is invented: every line is either a price we actually saw
+    or an item a human still has to confirm with the seller.
+    """
+    checklist = [
+        {
+            "item": f"采购参考价 {spec['sourcePrice']} {spec['sourceCurrency']}（{spec['sourcePlatform']}"
+                    + (f" · {spec.get('sourceSeller')}" if spec.get("sourceSeller") else "")
+                    + "，公开搜索摘要可见价）",
+            "status": "已有线索",
+            "note": "未打开商品页核实，需确认是否含配件、赠品与店铺优惠。",
+        },
+        {
+            "item": "确认起订量与阶梯价",
+            "status": "待确认",
+            "note": "公开页面没有 MOQ 与阶梯报价，必须向卖家索取。",
+        },
+        {
+            "item": "索取书面报价与付款方式",
+            "status": "待执行",
+            "note": "口头价格不作为利润依据；需要可追溯的报价记录。",
+        },
+        {
+            "item": "确认是否可开票与主体资质",
+            "status": "待确认",
+            "note": "跨境采购还要核对报关与进口主体要求。",
+        },
+        {
+            "item": "下样并核对型号/配置/颜色",
+            "status": "待执行",
+            "note": f"目标配置：{spec['config']}；同款不同颜色与套装会影响价差。",
+        },
+        {
+            "item": "确认发货地、时效与运费",
+            "status": "待确认",
+            "note": "到货时效直接决定小测窗口能否成立。",
+        },
+        {
+            "item": "验货清单（外观、配件、铭牌、序列号）",
+            "status": "待执行",
+            "note": "验货要求由你确定，系统不代设标准。",
+        },
+        {
+            "item": "核算到岸成本（头程、关税、破损率）",
+            "status": "待确认",
+            "note": "这些数字不在公开页面上，需要你补进利润模型。",
+        },
+    ]
+    if spec.get("sourcePromo"):
+        checklist.insert(1, {
+            "item": "复核低价是否为限时补贴或清仓价",
+            "status": "待确认",
+            "note": "促销价通常不可持续，直接按它备货风险很高。",
+        })
+    return checklist
+
+
 def build_price_gap_candidates(product: str, result: dict, profile: dict) -> list[dict]:
     """Turn comparable price gaps into reviewable candidates.
 
@@ -745,6 +819,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "targetTitle": item.get("targetTitle", ""),
             "targetColor": item.get("targetColor", ""),
             "gapValue": item["grossGap"],
+            "sourcePromo": bool(item.get("sourcePromo")),
             "gapText": f"同配置毛差价 {item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）",
         })
     cross = (result.get("crossBorder") or {}).get("pairs") or []
@@ -765,6 +840,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "targetTitle": pair.get("targetTitle", ""),
             "targetColor": pair.get("targetColor", ""),
             "gapValue": None,
+            "sourcePromo": False,
             "gapText": "两侧币种不同，需要人工填汇率、头程与关税后才能算贡献利润",
         })
 
@@ -845,6 +921,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 "purchaseCurrency": spec["sourceCurrency"],
             },
             "evidence": evidence,
+            "purchaseChecklist": build_purchase_checklist(product, spec),
             "priceGap": {
                 "sourcePlatform": spec["sourcePlatform"],
                 "sourceTitle": spec["sourceTitle"] or f"{product} {spec['config']}",

@@ -571,6 +571,11 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderPurchaseChecklist(candidate) {
+  const rows = (candidate.purchaseChecklist || []).map((item) => `<tr><td>${esc(item.item)}</td><td><span class="status-pill ${item.status === "已有线索" ? "done" : "wait"}">${esc(item.status)}</span></td><td>${esc(item.note || "")}</td></tr>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>采购待办清单</h3><small>除价格外都需要你向卖家确认</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>事项</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 function scoreRows(candidate) {
   const evidenceDimensions = {
     potential: ["demand", "competition", "margin"],
@@ -607,6 +612,7 @@ function renderOverview(candidate) {
       <div>
         <section class="panel"><div class="panel-head"><div><h3>Agent 选品判断</h3><small>${esc(candidate.strategyTitle || "指定商品研究")}${candidate.agentDiscovery?.confidence ? ` · 信号置信度 ${esc(candidate.agentDiscovery.confidence)}` : ""}</small></div><span class="status-pill">${statusLabel(candidate.status)}</span></div><div class="hypothesis-box">${esc(statusNote)}</div>${research ? `<div class="agent-final-review"><b>Agent 初筛：${({ keep: "进入人工审核", hold: "补证后审核", reject: "暂缓" })[research.recommendation] || "待审核"}</b><p>${esc(research.recommendationReason)}</p></div>` : ""}<div style="display:flex;gap:7px;margin-top:11px"><button class="button-secondary" data-action="tab" data-tab="evidence">查看来源证据</button><button class="button-quiet" data-action="tab" data-tab="tasks">查看 Agent 任务 →</button></div></section>
         ${candidate.priceGap ? renderPriceGapContext(candidate) : ""}
+        ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
         <section class="panel"><div class="panel-head"><h3>Agent 研究队列</h3><small>${candidate.tasks.length} 项专业任务</small></div><div class="task-list">${candidate.tasks.slice(0, 5).map(renderTaskRow).join("")}</div><div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="text-link" data-action="tab" data-tab="tasks">查看全部任务 →</button></div></section>
@@ -719,6 +725,9 @@ function reportMarkdown(candidate) {
   const workflow = (candidate.workflowStages || []).map((stage) => `- ${stage.number}. ${stage.title}：${stage.status}。${stage.note || ""}`).join("\n");
   const marketName = candidate.market || "日本";
   const sourceCountry = candidate.sourcingCountry || "中国";
+  const purchaseChecklist = (candidate.purchaseChecklist || []).length
+    ? `\n\n## 采购待办清单\n\n${candidate.purchaseChecklist.map((item) => `- [${item.status}] ${item.item}${item.note ? `（${item.note}）` : ""}`).join("\n")}`
+    : "";
   const validationPlan = [
     `- [ ] 需求：${evidenceDimensions.has("demand") ? "复核来源时间范围与目标顾客相关性，再确认需求是否持续。" : `从授权的${marketName}市场来源收集需求信号，并记录来源和采集日期。`}`,
     `- [ ] 竞品：${evidenceDimensions.has("competition") ? "抽样比较同类商品的价格、差评主题和品牌集中度。" : `记录${marketName}站同类商品页面、定价和评论痛点。`}`,
@@ -727,7 +736,7 @@ function reportMarkdown(candidate) {
     `- [ ] 合规与运营：确认商品规格、运输限制、平台限制、进口要求、认证和知识产权事项。`,
     `- [ ] 决策：人工复核来源和风险后，再决定小批量测试或暂停；本系统不自动采购。`,
   ].join("\n");
-  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## ${esc(candidate.market || "日本")}市场需求\n\n${evidenceFor("demand")}\n\n## ${esc(candidate.market || "日本")}站竞品\n\n${evidenceFor("competition")}\n\n## ${esc(candidate.sourcingCountry || "中国")}供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
+  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## ${esc(candidate.market || "日本")}市场需求\n\n${evidenceFor("demand")}\n\n## ${esc(candidate.market || "日本")}站竞品\n\n${evidenceFor("competition")}\n\n## ${esc(candidate.sourcingCountry || "中国")}供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}${purchaseChecklist}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
 }
 
 function renderReport(candidate) {
@@ -769,6 +778,9 @@ function renderProfile() {
           <div class="field"><label>退货/损耗预留（%）</label><input name="priceGapReturnReserveRate" type="number" min="0" step="0.1" value="${esc(gapCosts.returnReserveRate === "" ? "" : Number(gapCosts.returnReserveRate) * 100)}" placeholder="例如 2" /></div>
         </div>
       </div>
+      ${marketChannels.length ? `<div class="field full"><label>各平台佣金率覆盖（可选，留空则用上面的默认值）</label>
+        <div class="check-grid">${marketChannels.map((item) => `<label class="check-option"><input type="number" min="0" step="0.1" name="priceGapCommission_${esc(item.id)}" value="${gapCosts.byPlatform && gapCosts.byPlatform[item.id] && gapCosts.byPlatform[item.id].referralRate !== undefined && gapCosts.byPlatform[item.id].referralRate !== "" ? esc(Number(gapCosts.byPlatform[item.id].referralRate) * 100) : ""}" placeholder="默认" /><span><b>${esc(item.name)}</b><small>平台佣金率 %</small></span></label>`).join("")}</div>
+      </div>` : ""}
       <p class="form-help">目标市场决定 Agent 去哪些销售平台核对竞品与价格带；货源平台决定 Agent 去找哪些源头页面。未勾选时使用该来源国的默认集合。这些平台当前只提供公开页面线索，正式报价与 MOQ 仍需另行授权或人工确认。比价假设只在你填写后用于换算单件贡献利润，留空即显示“待补费用”。</p>
       <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存经营画像</button></div></div>
     </form></section><aside class="resource-aside"><div class="hero-overline">Scoring policy</div><h3>画像做适配，不替你做决定。</h3><p>基础机会分用于比较市场、利润和风险证据。你的预算、备货能力和风险偏好单独显示，帮助你理解“机会不错”是否等于“现在适合做”。</p><ul><li>${esc(market)}销售 · ${esc(profile.platform || "待确认平台")} 优先</li><li>${esc(sourceCountry)}采购 · ${esc(profile.fulfillment || "履约待确认")}</li><li>预算示例 ¥100,000 CNY，可修改或清空</li><li>目标市场可切到中国或海外，平台清单随市场变化</li></ul></aside></div>
@@ -1156,6 +1168,15 @@ document.addEventListener("submit", async (event) => {
       gapAssumptions.adCost = adCost === "" ? "" : Number(adCost);
       gapAssumptions.fulfillmentCost = fulfillment === "" ? "" : Number(fulfillment);
       gapAssumptions.returnReserveRate = returnRate === "" ? "" : Number(returnRate) / 100;
+      const byPlatform = {};
+      for (const [key, value] of data.entries()) {
+        if (!key.startsWith("priceGapCommission_")) continue;
+        const platformId = key.replace("priceGapCommission_", "");
+        const raw = String(value).trim();
+        if (raw === "") continue;
+        byPlatform[platformId] = { referralRate: Number(raw) / 100 };
+      }
+      gapAssumptions.byPlatform = byPlatform;
       profile.priceGapAssumptions = gapAssumptions;
       await api("/api/profile", { method: "PATCH", body: JSON.stringify(profile) });
       await refresh(); state.view = "profile"; render(); toast("经营画像已保存；基础机会分不变。"); return;

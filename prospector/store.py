@@ -20,11 +20,13 @@ DEFAULT_PROFILE = {
     "sourcingCapabilities": "",
     # Cost assumptions used to turn a visible price gap into a contribution
     # estimate.  Empty values mean "not decided yet", never zero.
+    # ``byPlatform`` holds per-platform overrides (platform id -> fees).
     "priceGapAssumptions": {
         "referralRate": "",
         "adCost": "",
         "fulfillmentCost": "",
         "returnReserveRate": "",
+        "byPlatform": {},
     },
 }
 
