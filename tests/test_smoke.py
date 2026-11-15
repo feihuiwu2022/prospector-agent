@@ -391,6 +391,43 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertIn("书面报价", sourcing[-1]["note"])
         self.assertIn("1820", sourcing[-1]["note"])
 
+    def test_purchase_order_draft_records_the_human_steps(self) -> None:
+        status, po = _post(
+            f"{self.base}/api/purchase-orders",
+            {
+                "platform": "淘宝 / 天猫",
+                "seller": "shop-a.taobao.com",
+                "product": "OPPO K13s",
+                "spec": "12G+256G",
+                "quantity": 60,
+                "unitPrice": 1820,
+                "currency": "CNY",
+                "leadTimeDays": 7,
+                "paymentTerms": "预付 30%",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(po["status"], "草案")
+        self.assertEqual(po["amount"], 109200.0)
+        self.assertTrue(po["expectedArrival"])
+        self.assertEqual(po["history"][0]["status"], "草案")
+
+        status, updated = _post(
+            f"{self.base}/api/purchase-orders/{po['id']}",
+            {"status": "已下单", "note": "已在平台下单"},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["status"], "已下单")
+        self.assertEqual(updated["history"][-1]["note"], "已在平台下单")
+
+        status, payload = _post(
+            f"{self.base}/api/purchase-orders/{po['id']}",
+            {"status": "已付款"},
+            method="PATCH",
+        )
+        self.assertEqual(status, 400)
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

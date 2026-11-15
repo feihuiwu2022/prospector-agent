@@ -104,6 +104,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 - `POST /api/candidates/{id}/review`：记录继续研究、暂缓或淘汰的人工审核决定。
 - `POST /api/suppliers`：把某个店铺标记为货源候选并写入档案；`PATCH /api/suppliers/{id}` 更新跟进状态与备注。
 - `build_supplier_comparison` 把一张询价单的书面答复并排比较（单价、MOQ、首单资金、交期、发票），标出最低价/最小起订/最快交期并计算回复率。
+- `POST /api/purchase-orders`：由书面报价生成采购单草案（金额、预计到货日、状态历史）；`PATCH /api/purchase-orders/{id}` 记录人工推进的订单状态。系统不联系卖家、不付款、不发货。
 - `POST /api/rfqs`：为同一商品向多家店铺生成询价单；`POST /api/rfqs/{id}/quotes`：录回一家店的书面报价，并同步写入货源档案的报价历史；带 `applyToCandidate` 时把该报价回填为候选的采购价，并生成一条“人工录入的询价回复”来源证据。
 - `POST /api/discovery`（`trigger=price_gap_pair`）：用候选里的比价配对生成价差研究，先跑规格/包装匹配，匹配不通过不给价差结论，费用未填齐只报“待补费用”。
 - 会话与运行结果暂存在本地 JSON store；`GET /api/bootstrap` 返回会话、消息和历史运行。

@@ -47,6 +47,7 @@ DEFAULT_STATE = {
     "priceObservations": [],
     "suppliers": [],
     "rfqs": [],
+    "purchaseOrders": [],
 }
 
 

@@ -579,6 +579,25 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderPurchaseOrderPanel(candidate) {
+  const orders = (state.purchaseOrders || []).filter((item) => item.candidateId === candidate.id);
+  if (!orders.length) {
+    return `<section class="panel"><div class="panel-head"><h3>采购单草案</h3><small>由书面报价生成，你确认后再下单</small></div><div class="inline-alert">还没有采购单草案。先在询价单里录回书面报价，再从比较表生成草案。</div></section>`;
+  }
+  const statusOptions = ["草案", "已下单", "已发货", "已收货"];
+  const rows = orders.map((po) => `<tr>
+    <td><b>${esc(po.platform)}</b><small>${esc(po.seller)}</small></td>
+    <td>${esc(po.product || "")}<small>${esc(po.spec || "")}</small></td>
+    <td>${Number(po.quantity).toLocaleString("zh-CN")} 件</td>
+    <td>${Number(po.unitPrice).toLocaleString("zh-CN")} ${esc(po.currency || "")}</td>
+    <td>${Number(po.amount).toLocaleString("zh-CN")} ${esc(po.currency || "")}</td>
+    <td>${esc(po.expectedArrival || "待确认")}</td>
+    <td><select data-po-status="${esc(po.id)}">${statusOptions.map((status) => `<option ${po.status === status ? "selected" : ""}>${status}</option>`).join("")}</select></td>
+  </tr>`).join("");
+  const history = orders.flatMap((po) => (po.history || []).map((item) => `<li>${esc(item.at ? item.at.slice(0, 16).replace("T", " ") : "")} · ${esc(item.status)}${item.note ? ` · ${esc(item.note)}` : ""}</li>`)).join("");
+  return `<section class="panel"><div class="panel-head"><h3>采购单草案</h3><small>系统不联系卖家、不付款、不发货</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>店铺</th><th>商品 / 规格</th><th>数量</th><th>单价</th><th>金额</th><th>预计到货</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>${history ? `<ul style="color:#9aa39b;font-size:9px;line-height:1.7">${history}</ul>` : ""}<div class="bottom-note"><span>ⓘ</span><span>草案只是给你核对与下单用的清单；状态变化由你手工记录。</span></div></section>`;
+}
+
 function renderRfqPanel(candidate) {
   const rfqs = (state.rfqs || []).filter((item) => item.candidateId === candidate.id);
   const pairing = candidate.priceGap || {};
@@ -610,6 +629,7 @@ function renderRfqPanel(candidate) {
       <td>${row.cashNeeded == null ? "—" : `${Number(row.cashNeeded).toLocaleString("zh-CN")} ${esc(row.currency || "")}`}</td>
       <td>${row.withinBudget === null ? "—" : row.withinBudget ? `<span class="status-pill done">在预算内</span>` : `<span class="status-pill wait">超预算</span>`}</td>
       <td>${esc(row.invoice || row.note || "—")}</td>
+      <td>${row.unitPrice == null ? "" : `<button class="button-quiet" data-action="create-po" data-rfq="${esc(rfq.id)}" data-platform="${esc(row.platform)}" data-seller="${esc(row.seller)}">生成采购单</button>`}</td>
     </tr>`).join("");
     const comparisonBlock = comparisonRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>店铺</th><th>书面单价</th><th>MOQ</th><th>交期</th><th>首单资金</th><th>预算对照</th><th>发票/备注</th></tr></thead><tbody>${comparisonRows}</tbody></table></div>${(comparison.notes || []).map((item) => `<li>${esc(item)}</li>`).join("")}` : "";
     const replyRate = comparison.replyRate == null ? "—" : `${Math.round(comparison.replyRate * 100)}%`;
@@ -772,6 +792,7 @@ function renderOverview(candidate) {
         ${renderSellerComparison(candidate)}
         ${renderPilotPanel(candidate)}
         ${renderRfqPanel(candidate)}
+        ${renderPurchaseOrderPanel(candidate)}
         ${renderScalePlan(candidate)}
         ${renderTimeline(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
@@ -1403,6 +1424,37 @@ document.addEventListener("click", async (event) => {
       toast("报价已记录，并同步到货源档案。");
       return;
     }
+    if (action === "create-po") {
+      const rfq = (state.rfqs || []).find((item) => item.id === button.dataset.rfq);
+      const quote = (rfq?.quotes || []).find((item) => item.platform === button.dataset.platform && item.seller === button.dataset.seller);
+      if (!quote) { toast("没有找到这家店的书面报价。", true); return; }
+      const quantity = window.prompt(`采购数量（建议不小于 MOQ ${quote.moq ?? "—"}）`, String(quote.moq ?? 50));
+      if (quantity === null) return;
+      const payment = window.prompt("付款方式 / 账期（可留空）", "") || "";
+      const note = window.prompt("备注（验货要求、到货地址等，可留空）", "") || "";
+      const created = await api("/api/purchase-orders", {
+        method: "POST",
+        body: JSON.stringify({
+          candidateId: rfq.candidateId || "",
+          rfqId: rfq.id,
+          platform: quote.platform,
+          seller: quote.seller,
+          product: rfq.product,
+          spec: rfq.spec,
+          quantity: Number(quantity),
+          unitPrice: quote.unitPrice,
+          currency: quote.currency,
+          leadTimeDays: quote.leadTimeDays,
+          paymentTerms: payment,
+          note,
+        }),
+      });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast(`采购单草案已生成：${Number(created.quantity)} 件 · ${Number(created.amount).toLocaleString("zh-CN")} ${created.currency}。`);
+      return;
+    }
     if (action === "mark-rfq-sent") {
       await api(`/api/rfqs/${encodeURIComponent(button.dataset.rfq)}`, { method: "PATCH", body: JSON.stringify({ sent: true }) });
       await refresh();
@@ -1773,6 +1825,18 @@ document.addEventListener("change", async (event) => {
       state.view = "detail";
       render();
       toast("采购待办已更新，六步流程状态同步推进。");
+    } catch (error) {
+      toast(error.message, true);
+    }
+    return;
+  }
+  if (target.dataset && target.dataset.poStatus) {
+    try {
+      await api(`/api/purchase-orders/${encodeURIComponent(target.dataset.poStatus)}`, { method: "PATCH", body: JSON.stringify({ status: target.value }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("采购单状态已记录。");
     } catch (error) {
       toast(error.message, true);
     }

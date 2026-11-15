@@ -8,7 +8,7 @@ import math
 import mimetypes
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -260,6 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                     {**item, "comparison": build_supplier_comparison(item, data.get("profile", DEFAULT_PROFILE))}
                     for item in data.get("rfqs", [])
                 ],
+                "purchaseOrders": data.get("purchaseOrders", []),
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -315,6 +316,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/rfqs":
             self.create_rfq(body)
+            return
+        if path == "/api/purchase-orders":
+            self.create_purchase_order(body)
             return
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
@@ -955,6 +959,64 @@ class Handler(BaseHTTPRequestHandler):
         candidate["updatedAt"] = utc_now()
         advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
 
+    def create_purchase_order(self, body: dict) -> None:
+        """Draft a purchase order from a written quote.
+
+        The draft is a document for the operator to check and place.  The
+        system never contacts a shop, never pays and never ships.
+        """
+        platform = str(body.get("platform", "")).strip()[:80]
+        seller = str(body.get("seller", "")).strip()[:120]
+        if not platform or not seller:
+            raise ValueError("采购单需要平台与店铺。")
+        try:
+            quantity = float(body.get("quantity"))
+            unit_price = float(body.get("unitPrice"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("采购单需要有效的数量与单价。") from exc
+        if quantity <= 0 or unit_price <= 0:
+            raise ValueError("数量与单价必须大于 0。")
+        try:
+            lead_days = int(float(body.get("leadTimeDays") or 0))
+        except (TypeError, ValueError):
+            lead_days = 0
+        now = utc_now()
+        expected = ""
+        if lead_days > 0:
+            expected = (date.fromisoformat(now[:10]) + timedelta(days=lead_days)).isoformat()
+        po = {
+            "id": str(uuid4()),
+            "candidateId": str(body.get("candidateId", ""))[:64],
+            "rfqId": str(body.get("rfqId", ""))[:64],
+            "platform": platform,
+            "seller": seller,
+            "product": str(body.get("product", ""))[:160],
+            "spec": str(body.get("spec", ""))[:120],
+            "quantity": quantity,
+            "unitPrice": unit_price,
+            "amount": round(quantity * unit_price, 2),
+            "currency": str(body.get("currency", ""))[:8],
+            "leadTimeDays": lead_days,
+            "expectedArrival": expected,
+            "paymentTerms": str(body.get("paymentTerms", ""))[:200],
+            "note": str(body.get("note", ""))[:600],
+            "status": "草案",
+            "history": [{"status": "草案", "at": now, "note": "由书面报价生成，尚未下单。"}],
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+        def save(data):
+            data.setdefault("purchaseOrders", []).append(po)
+            candidate = find_candidate(data, po["candidateId"]) if po["candidateId"] else None
+            if candidate is not None:
+                candidate.setdefault("purchaseOrders", []).append(po["id"])
+                candidate["updatedAt"] = now
+            return po
+
+        saved = STORE.update(save)
+        self.send_json(201, saved)
+
     def build_metrics(self, data: dict) -> dict:
         """A retrospective of the local research record.
 
@@ -1402,6 +1464,31 @@ class Handler(BaseHTTPRequestHandler):
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
             self.record_quote(quote_match.group(1), body)
+            return
+        po_match = re.fullmatch(r"/api/purchase-orders/([\w-]+)", path)
+        if po_match:
+            status = str(body.get("status", "")).strip()[:20]
+            if status not in {"草案", "已下单", "已发货", "已收货"}:
+                raise ValueError("采购单状态必须是草案、已下单、已发货或已收货。")
+
+            def update_po(data):
+                po = next((item for item in data.get("purchaseOrders", []) if item.get("id") == po_match.group(1)), None)
+                if po is None:
+                    return None
+                po["status"] = status
+                po.setdefault("history", []).append({
+                    "status": status,
+                    "at": utc_now(),
+                    "note": str(body.get("note", ""))[:400],
+                })
+                po["updatedAt"] = utc_now()
+                candidate = find_candidate(data, po.get("candidateId", ""))
+                if candidate is not None:
+                    candidate["updatedAt"] = utc_now()
+                return po
+
+            result = STORE.update(update_po)
+            self.send_json(200 if result else 404, result or {"error": "没有找到这张采购单。"})
             return
         rfq_match = re.fullmatch(r"/api/rfqs/([\w-]+)", path)
         if rfq_match:
