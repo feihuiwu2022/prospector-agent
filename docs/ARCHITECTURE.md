@@ -103,6 +103,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 - `POST /api/agent/chat`：按四种模式启动异步会话任务；手动竞品分析输出竞品报告，同品比价输出同配置差价表与差价候选，其他两种模式输出候选。
 - `POST /api/candidates/{id}/review`：记录继续研究、暂缓或淘汰的人工审核决定。
 - `POST /api/suppliers`：把某个店铺标记为货源候选并写入档案；`PATCH /api/suppliers/{id}` 更新跟进状态与备注。
+- `POST /api/rfqs`：为同一商品向多家店铺生成询价单；`POST /api/rfqs/{id}/quotes`：录回一家店的书面报价，并同步写入货源档案的报价历史。
 - `POST /api/discovery`（`trigger=price_gap_pair`）：用候选里的比价配对生成价差研究，先跑规格/包装匹配，匹配不通过不给价差结论，费用未填齐只报“待补费用”。
 - 会话与运行结果暂存在本地 JSON store；`GET /api/bootstrap` 返回会话、消息和历史运行。
 - `GET /api/agent/runs/{id}`：查询阶段进度和结果。

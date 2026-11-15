@@ -46,6 +46,7 @@ DEFAULT_STATE = {
     "conversations": [],
     "priceObservations": [],
     "suppliers": [],
+    "rfqs": [],
 }
 
 

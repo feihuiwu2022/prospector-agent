@@ -292,6 +292,45 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertGreaterEqual(metrics["candidates"]["total"], 0)
         self.assertIn("rejectReasons", metrics["reviews"])
 
+    def test_rfq_creation_and_quote_collection(self) -> None:
+        status, rfq = _post(
+            f"{self.base}/api/rfqs",
+            {
+                "product": "OPPO K13s",
+                "spec": "12G+256G",
+                "market": "中国",
+                "currency": "CNY",
+                "targets": [
+                    {"platform": "淘宝 / 天猫", "seller": "shop-a.taobao.com", "price": 1899, "currency": "CNY"},
+                    {"platform": "京东", "seller": "mall.jd.com", "price": 2099, "currency": "CNY"},
+                ],
+                "questions": ["起订量与阶梯价"],
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(len(rfq["targets"]), 2)
+        self.assertEqual(rfq["status"], "待发送")
+
+        status, updated = _post(
+            f"{self.base}/api/rfqs/{rfq['id']}/quotes",
+            {"platform": "淘宝 / 天猫", "seller": "shop-a.taobao.com", "unitPrice": 1820, "moq": 50, "leadTimeDays": 7, "note": "含税"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(updated["quotes"]), 1)
+        self.assertEqual(updated["status"], "回收中")
+        self.assertEqual(updated["targets"][0]["status"], "已报价")
+
+        bootstrap = json.loads(_get(f"{self.base}/api/bootstrap")[2])
+        supplier = next(item for item in bootstrap["suppliers"] if item["seller"] == "shop-a.taobao.com")
+        self.assertEqual(supplier["status"], "已报价")
+        self.assertEqual(supplier["lastPrice"], 1820)
+        self.assertTrue(supplier["quoteHistory"])
+
+    def test_rfq_needs_product_and_targets(self) -> None:
+        status, payload = _post(f"{self.base}/api/rfqs", {"product": "OPPO K13s"}, method="POST")
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

@@ -255,6 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                 "conversations": sorted(data.get("conversations", []), key=lambda item: item.get("updatedAt", ""), reverse=True),
                 "priceObservations": data.get("priceObservations", [])[-300:],
                 "suppliers": data.get("suppliers", []),
+                "rfqs": data.get("rfqs", []),
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -307,6 +308,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/suppliers":
             self.upsert_supplier(body)
+            return
+        if path == "/api/rfqs":
+            self.create_rfq(body)
+            return
+        quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
+        if quote_match:
+            self.record_quote(quote_match.group(1), body)
             return
         promote_match = re.fullmatch(r"/api/discovery/([\w-]+)/candidate", path)
         if promote_match:
@@ -745,6 +753,147 @@ class Handler(BaseHTTPRequestHandler):
                 if run:
                     run.update({"status": "failed", "stage": "failed", "progress": 100, "message": "Agent 运行遇到内部错误，请检查服务并重试。", "completedAt": utc_now(), "updatedAt": utc_now()})
             STORE.update(fail_unexpected)
+
+    def create_rfq(self, body: dict) -> None:
+        """Create a request for quotation aimed at several shops.
+
+        The RFQ lists the questions that need a written answer and the shops
+        to ask.  It is a communication record: nothing here orders anything.
+        """
+        product = str(body.get("product", "")).strip()[:160]
+        spec = str(body.get("spec", "")).strip()[:120]
+        if not product:
+            raise ValueError("询价单需要商品名称。")
+        targets = []
+        for item in body.get("targets", []) or []:
+            if not isinstance(item, dict):
+                continue
+            platform = str(item.get("platform", "")).strip()[:80]
+            seller = str(item.get("seller", "")).strip()[:120]
+            if not platform or not seller:
+                continue
+            targets.append({
+                "platform": platform,
+                "seller": seller,
+                "url": str(item.get("url", "")).strip()[:1000],
+                "referencePrice": item.get("price"),
+                "referenceCurrency": str(item.get("currency", ""))[:8],
+                "status": "待报价",
+            })
+        if not targets:
+            raise ValueError("询价单至少要有一个目标店铺。")
+        questions = [str(question).strip()[:200] for question in (body.get("questions") or []) if str(question).strip()]
+        if not questions:
+            questions = [
+                "起订量与阶梯价",
+                "书面报价与付款方式",
+                "是否可开票与主体资质",
+                "样品与交期",
+                "发货地与运费",
+                "验货与售后",
+            ]
+        now = utc_now()
+        rfq = {
+            "id": str(uuid4()),
+            "candidateId": str(body.get("candidateId", ""))[:64],
+            "title": f"{product} {spec}".strip(),
+            "product": product,
+            "spec": spec,
+            "market": str(body.get("market", ""))[:80],
+            "currency": str(body.get("currency", ""))[:8],
+            "targets": targets,
+            "questions": questions,
+            "quotes": [],
+            "status": "待发送",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+        def save(data):
+            data.setdefault("rfqs", []).append(rfq)
+            return rfq
+
+        saved = STORE.update(save)
+        self.send_json(201, saved)
+
+    def record_quote(self, rfq_id: str, body: dict) -> None:
+        """Store one shop's written answer and mirror it into the supplier file."""
+        platform = str(body.get("platform", "")).strip()[:80]
+        seller = str(body.get("seller", "")).strip()[:120]
+        if not platform or not seller:
+            raise ValueError("报价记录需要平台与店铺。")
+
+        def number(key: str):
+            raw = body.get(key)
+            if raw in (None, ""):
+                return None
+            try:
+                return float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} 必须是有效数字。") from exc
+
+        quote = {
+            "platform": platform,
+            "seller": seller,
+            "moq": number("moq"),
+            "unitPrice": number("unitPrice"),
+            "currency": str(body.get("currency", ""))[:8],
+            "leadTimeDays": number("leadTimeDays"),
+            "sample": str(body.get("sample", ""))[:120],
+            "invoice": str(body.get("invoice", ""))[:120],
+            "note": str(body.get("note", ""))[:600],
+            "recordedAt": utc_now(),
+        }
+
+        def save(data):
+            rfq = next((item for item in data.get("rfqs", []) if item.get("id") == rfq_id), None)
+            if rfq is None:
+                return None
+            rfq["quotes"] = [item for item in rfq.get("quotes", []) if not (item.get("platform") == platform and item.get("seller") == seller)]
+            rfq["quotes"].append(quote)
+            for target in rfq.get("targets", []):
+                if target.get("platform") == platform and target.get("seller") == seller:
+                    target["status"] = "已报价"
+            answered = len({(item.get("platform"), item.get("seller")) for item in rfq["quotes"]})
+            rfq["status"] = "已齐" if answered >= len(rfq.get("targets", [])) else "回收中"
+            rfq["updatedAt"] = utc_now()
+
+            suppliers = data.setdefault("suppliers", [])
+            supplier = next(
+                (item for item in suppliers if item.get("platform") == platform and item.get("seller") == seller),
+                None,
+            )
+            if supplier is None:
+                supplier = {
+                    "id": str(uuid4()),
+                    "platform": platform,
+                    "seller": seller,
+                    "url": "",
+                    "products": [],
+                    "note": "",
+                    "status": "已报价",
+                    "lastPrice": quote.get("unitPrice"),
+                    "lastCurrency": quote.get("currency", ""),
+                    "lastObservedAt": "",
+                    "quoteHistory": [],
+                    "createdAt": utc_now(),
+                    "updatedAt": utc_now(),
+                }
+                suppliers.append(supplier)
+            supplier["status"] = "已报价"
+            history = supplier.setdefault("quoteHistory", [])
+            history.append({"product": rfq.get("product"), "spec": rfq.get("spec"), **quote})
+            supplier["quoteHistory"] = history[-20:]
+            if quote.get("unitPrice") not in (None, ""):
+                supplier["lastPrice"] = quote.get("unitPrice")
+                supplier["lastCurrency"] = quote.get("currency", "")
+            if rfq.get("product") and rfq["product"] not in supplier["products"]:
+                supplier["products"].append(rfq["product"])
+            supplier["updatedAt"] = utc_now()
+            return rfq
+
+        result = STORE.update(save)
+        self.send_json(200 if result else 404, result or {"error": "没有找到这个询价单。"})
 
     def build_metrics(self, data: dict) -> dict:
         """A retrospective of the local research record.
@@ -1185,6 +1334,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, result)
 
     def handle_api_patch(self, path: str, body: dict) -> None:
+        quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
+        if quote_match:
+            self.record_quote(quote_match.group(1), body)
+            return
         if path == "/api/profile":
             allowed = set(DEFAULT_PROFILE)
             market = str(body.get("market", "")).strip()[:80]

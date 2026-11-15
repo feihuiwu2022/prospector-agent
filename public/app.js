@@ -579,6 +579,33 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderRfqPanel(candidate) {
+  const rfqs = (state.rfqs || []).filter((item) => item.candidateId === candidate.id);
+  const pairing = candidate.priceGap || {};
+  const createButton = pairing.product
+    ? `<button class="button-secondary" data-action="create-rfq" data-id="${esc(candidate.id)}">生成询价单</button>`
+    : "";
+  if (!rfqs.length) {
+    return `<section class="panel"><div class="panel-head"><h3>询价单与报价回收</h3><small>发给多家店铺，再把书面答复收回</small></div><div class="inline-alert">还没有询价单。${createButton}</div></section>`;
+  }
+  const blocks = rfqs.map((rfq) => {
+    const targets = (rfq.targets || []).map((target) => {
+      const quote = (rfq.quotes || []).find((item) => item.platform === target.platform && item.seller === target.seller);
+      return `<tr>
+        <td><b>${esc(target.platform)}</b><small>${esc(target.seller)}</small></td>
+        <td>${target.referencePrice == null ? "—" : `${Number(target.referencePrice).toLocaleString("zh-CN")} ${esc(target.referenceCurrency || "")}`}</td>
+        <td>${quote ? `<span class="status-pill done">已报价</span>` : `<span class="status-pill wait">${esc(target.status || "待报价")}</span>`}</td>
+        <td>${quote ? `${quote.unitPrice == null ? "—" : Number(quote.unitPrice).toLocaleString("zh-CN")} ${esc(quote.currency || "")}<small>MOQ ${quote.moq ?? "—"} · 交期 ${quote.leadTimeDays ?? "—"} 天</small>` : "—"}</td>
+        <td>${quote ? esc(quote.note || "") : "—"}</td>
+        <td><button class="button-quiet" data-action="record-quote" data-rfq="${esc(rfq.id)}" data-platform="${esc(target.platform)}" data-seller="${esc(target.seller)}">${quote ? "修改报价" : "录入报价"}</button></td>
+      </tr>`;
+    }).join("");
+    const questions = (rfq.questions || []).map((item) => `<li>${esc(item)}</li>`).join("");
+    return `<div class="report-list"><b>${esc(rfq.title)} · ${esc(rfq.status || "")}</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>目标店铺</th><th>公开参考价</th><th>状态</th><th>书面报价</th><th>备注</th><th></th></tr></thead><tbody>${targets}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>需要卖家书面回答：${questions ? "" : "无"}</span></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${questions}</ul></div>`;
+  }).join("");
+  return `<section class="panel"><div class="panel-head"><h3>询价单与报价回收</h3><small>发给多家店铺，再把书面答复收回</small>${createButton}</div>${blocks}</section>`;
+}
+
 function renderScalePlan(candidate) {
   const plan = candidate.scalePlan || {};
   if (!plan.complete) {
@@ -710,6 +737,7 @@ function renderOverview(candidate) {
         ${candidate.priceScenarios?.length ? renderCandidateScenarios(candidate) : ""}
         ${renderSellerComparison(candidate)}
         ${renderPilotPanel(candidate)}
+        ${renderRfqPanel(candidate)}
         ${renderScalePlan(candidate)}
         ${renderTimeline(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
@@ -1100,6 +1128,20 @@ function renderLeadLibrary(observations) {
   return `<section class="panel"><div class="panel-head"><h3>货源线索库</h3><small>比价时见过的页面与店铺，按最近一次报价排序</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 商品</th><th>最近可见报价</th><th>观察日期</th><th>次数</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>线索库只是“某个页面在某天显示过这个价”，不是供应商能力、MOQ 或可稳定拿货的证明。</span></div></section>`;
 }
 
+function renderRfqArchive(rfqs) {
+  if (!rfqs.length) {
+    return `<section class="panel"><div class="panel-head"><h3>询价单</h3><small>发给谁、问了什么、回了什么</small></div><div class="table-empty" style="padding:22px"><h3>还没有询价单</h3><p>在候选详情里点「生成询价单」，可以把同一商品同时问多家店铺。</p></div></section>`;
+  }
+  const rows = rfqs.map((rfq) => `<tr>
+    <td><b>${esc(rfq.title || rfq.product || "")}</b><small>${esc(rfq.spec || "")}</small></td>
+    <td>${(rfq.targets || []).length} 家</td>
+    <td>${(rfq.quotes || []).length} 条回复</td>
+    <td><span class="status-pill ${rfq.status === "已齐" ? "done" : "wait"}">${esc(rfq.status || "")}</span></td>
+    <td>${esc(rfq.createdAt ? fmtDate(rfq.createdAt) : "")}</td>
+  </tr>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>询价单</h3><small>发给谁、问了什么、回了什么</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>商品 / 规格</th><th>目标店铺</th><th>收到回复</th><th>状态</th><th>创建日期</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 function renderSupplierArchive(suppliers) {
   if (!suppliers.length) {
     return `<section class="panel"><div class="panel-head"><h3>货源档案</h3><small>标记过的店铺与跟进状态</small></div><div class="table-empty" style="padding:22px"><h3>还没有标记货源</h3><p>在采购比价表或货源线索库里点“标记货源”，就会在这里建立一份店铺档案。</p></div></section>`;
@@ -1226,6 +1268,72 @@ document.addEventListener("click", async (event) => {
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
     if (action === "profile") { state.view = "profile"; render(); return; }
+    if (action === "create-rfq") {
+      const candidate = state.candidates.find((item) => item.id === button.dataset.id);
+      if (!candidate) return;
+      const pairing = candidate.priceGap || {};
+      const observations = (state.priceObservations || []).filter((item) => item.product === pairing.product);
+      const targets = [];
+      const seen = new Set();
+      for (const item of observations) {
+        const seller = (item.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1");
+        const key = `${item.platform}|${seller}`;
+        if (!seller || seen.has(key)) continue;
+        seen.add(key);
+        targets.push({ platform: item.platform, seller, url: item.url, price: item.price, currency: item.currency });
+      }
+      if (!targets.length) {
+        toast("还没有这个商品的店铺记录，先跑一次比价或标记货源。", true);
+        return;
+      }
+      const questions = (candidate.purchaseChecklist || []).filter((item) => item.id !== "price_evidence").map((item) => item.item);
+      const created = await api("/api/rfqs", {
+        method: "POST",
+        body: JSON.stringify({
+          candidateId: candidate.id,
+          product: pairing.product,
+          spec: pairing.sourceVariant || "",
+          market: candidate.market,
+          currency: pairing.sourceCurrency || "",
+          targets,
+          questions,
+        }),
+      });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast(`询价单已创建，含 ${created.targets.length} 家店铺。`);
+      return;
+    }
+    if (action === "record-quote") {
+      const rfqId = button.dataset.rfq;
+      const platform = button.dataset.platform;
+      const seller = button.dataset.seller;
+      const unitPrice = window.prompt(`${platform} · ${seller} 的书面单价（留空表示未报价）`, "");
+      if (unitPrice === null) return;
+      const moq = window.prompt("起订量（MOQ）", "");
+      if (moq === null) return;
+      const leadTime = window.prompt("交期（天）", "");
+      if (leadTime === null) return;
+      const note = window.prompt("备注（发票、样品、付款方式等）", "") || "";
+      await api(`/api/rfqs/${encodeURIComponent(rfqId)}/quotes`, {
+        method: "POST",
+        body: JSON.stringify({
+          platform,
+          seller,
+          unitPrice: unitPrice === "" ? null : Number(unitPrice),
+          moq: moq === "" ? null : Number(moq),
+          leadTimeDays: leadTime === "" ? null : Number(leadTime),
+          currency: state.profile?.market === "中国" ? "CNY" : "JPY",
+          note,
+        }),
+      });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("报价已记录，并同步到货源档案。");
+      return;
+    }
     if (action === "download-rfq") {
       const candidate = currentCandidate();
       if (!candidate) return;
