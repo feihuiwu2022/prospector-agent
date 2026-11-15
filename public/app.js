@@ -173,6 +173,7 @@ function render() {
   if (state.view === "detail") renderDetail();
   else if (state.view === "profile") renderProfile();
   else if (state.view === "discovery") renderDiscovery();
+  else if (state.view === "board") renderBoard();
   else renderHome();
 }
 
@@ -621,7 +622,15 @@ function renderPilotPanel(candidate) {
     </form>
     <div class="profit-result" style="margin-top:12px"><div class="profit-metric"><span>结论</span><b class="${review.verdict === "达标" ? "" : "negative"}">${esc(verdictLabel)}</b></div><div class="profit-metric"><span>建议</span><b>${esc(review.recommendation || "待补数据")}</b></div><div class="profit-metric"><span>退款率</span><b>${metrics.refundRate == null ? "—" : `${(metrics.refundRate * 100).toFixed(1)}%`}</b></div><div class="profit-metric"><span>净利率</span><b>${metrics.netMargin == null ? "—" : `${(metrics.netMargin * 100).toFixed(1)}%`}</b></div></div>
     ${findings ? `<ul style="color:#9aa39b;font-size:9px;line-height:1.7">${findings}</ul>` : ""}
+    ${renderCalibration(candidate)}
   </section>`;
+}
+
+function renderCalibration(candidate) {
+  const suggestions = candidate.calibration || [];
+  if (!suggestions.length) return "";
+  const rows = suggestions.map((item) => `<tr><td>${esc(item.label)}</td><td>${item.current == null ? "未填" : esc(item.current)}</td><td>${esc(item.suggested)}</td><td>${esc(item.note || "")}</td><td>${item.field === "measuredNetMargin" ? "仅对照" : `<button class="button-quiet" data-action="apply-calibration" data-field="${esc(item.field)}" data-value="${esc(item.suggested)}">应用到利润假设</button>`}</td></tr>`).join("");
+  return `<div class="report-list"><b>用实测值校准利润假设</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>项目</th><th>当前假设</th><th>实测值</th><th>说明</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function renderSellerComparison(candidate) {
@@ -843,6 +852,9 @@ function reportMarkdown(candidate) {
   const workflow = (candidate.workflowStages || []).map((stage) => `- ${stage.number}. ${stage.title}：${stage.status}。${stage.note || ""}`).join("\n");
   const marketName = candidate.market || "日本";
   const sourceCountry = candidate.sourcingCountry || "中国";
+  const timeline = (candidate.timeline || []).length
+    ? `\n\n## 阶段时间线\n\n${candidate.timeline.map((item) => `- ${item.at ? item.at.slice(0, 16).replace("T", " ") : ""} · ${item.title || item.stageId}：${item.from || ""} → ${item.to || ""}${item.note ? `（${item.note}）` : ""}`).join("\n")}`
+    : "";
   const purchaseChecklist = (candidate.purchaseChecklist || []).length
     ? `\n\n## 采购待办清单\n\n${candidate.purchaseChecklist.map((item) => `- [${item.status}] ${item.item}${item.note ? `（${item.note}）` : ""}`).join("\n")}`
     : "";
@@ -854,7 +866,7 @@ function reportMarkdown(candidate) {
     `- [ ] 合规与运营：确认商品规格、运输限制、平台限制、进口要求、认证和知识产权事项。`,
     `- [ ] 决策：人工复核来源和风险后，再决定小批量测试或暂停；本系统不自动采购。`,
   ].join("\n");
-  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## ${esc(candidate.market || "日本")}市场需求\n\n${evidenceFor("demand")}\n\n## ${esc(candidate.market || "日本")}站竞品\n\n${evidenceFor("competition")}\n\n## ${esc(candidate.sourcingCountry || "中国")}供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}${purchaseChecklist}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
+  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## ${esc(candidate.market || "日本")}市场需求\n\n${evidenceFor("demand")}\n\n## ${esc(candidate.market || "日本")}站竞品\n\n${evidenceFor("competition")}\n\n## ${esc(candidate.sourcingCountry || "中国")}供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}${purchaseChecklist}${timeline}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
 }
 
 function renderReport(candidate) {
@@ -912,6 +924,58 @@ function renderProfile() {
       <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存经营画像</button></div></div>
     </form></section><aside class="resource-aside"><div class="hero-overline">Scoring policy</div><h3>画像做适配，不替你做决定。</h3><p>基础机会分用于比较市场、利润和风险证据。你的预算、备货能力和风险偏好单独显示，帮助你理解“机会不错”是否等于“现在适合做”。</p><ul><li>${esc(market)}销售 · ${esc(profile.platform || "待确认平台")} 优先</li><li>${esc(sourceCountry)}采购 · ${esc(profile.fulfillment || "履约待确认")}</li><li>预算示例 ¥100,000 CNY，可修改或清空</li><li>目标市场可切到中国或海外，平台清单随市场变化</li></ul></aside></div>
   `;
+}
+
+function boardBuckets() {
+  const buckets = {
+    "待我决策": [],
+    "缺数据": [],
+    "可扩量": [],
+    "暂缓": [],
+    "已淘汰": [],
+  };
+  for (const candidate of state.candidates || []) {
+    const review = candidate.humanReview || {};
+    if (review.decision === "reject" || candidate.status === "archived") {
+      buckets["已淘汰"].push(candidate);
+      continue;
+    }
+    if (candidate.status === "paused") {
+      buckets["暂缓"].push(candidate);
+      continue;
+    }
+    if (candidate.pilotReview?.verdict === "达标") {
+      buckets["可扩量"].push(candidate);
+      continue;
+    }
+    const gaps = (candidate.workflowStages || []).filter((stage) => stage.status === "blocked" || stage.status === "partial");
+    if (gaps.length) buckets["缺数据"].push(candidate);
+    else buckets["待我决策"].push(candidate);
+  }
+  return buckets;
+}
+
+function renderBoard() {
+  const buckets = boardBuckets();
+  const block = (title, hint, items) => `<section class="panel"><div class="panel-head"><div><h3>${esc(title)}</h3><small>${esc(hint)}</small></div><span class="connector-count">${items.length}</span></div>${items.length ? `<div class="discovery-run-list">${items.map((candidate) => `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(candidate.category || "研究项目")} · ${esc(candidate.market || "")} / ${esc(candidate.platform || "")}</span><h3>${esc(candidate.name)}</h3></div><time>${fmtDate(candidate.updatedAt)}</time></div><p class="run-signal-note">${esc(boardNote(candidate))}</p><div class="run-signal-metrics"><span>${esc(candidate.status || "")}</span><span>${(candidate.evidence || []).length} 条来源</span><span>${(candidate.workflowStages || []).filter((stage) => stage.status === "completed").length}/6 步完成</span></div><div class="candidate-card-actions"><button class="button-secondary" data-action="open" data-id="${esc(candidate.id)}">查看候选</button></div></article>`).join("")}</div>` : `<div class="table-empty" style="padding:22px"><p>${esc(title)}里暂时没有内容。</p></div>`}</section>`;
+  content.innerHTML = `
+    <div class="page-kicker">Decision board</div>
+    <div class="page-heading"><div><h1>决策看板</h1><p>按“需要你做什么”排列候选：待决策、缺数据、可扩量、暂缓与已淘汰。</p></div><button class="button-quiet" data-action="home">返回工作台</button></div>
+    ${block("待我决策", "证据齐了、等你继续研究或淘汰的候选", buckets["待我决策"])}
+    ${block("缺数据", "流程里还有待补数据或被阻塞的阶段", buckets["缺数据"])}
+    ${block("可扩量", "小测已达标，可以看备货测算", buckets["可扩量"])}
+    ${block("暂缓", "你主动挂起的候选", buckets["暂缓"])}
+    ${block("已淘汰", "已归档或被淘汰的候选，理由留档", buckets["已淘汰"])}
+  `;
+}
+
+function boardNote(candidate) {
+  const review = candidate.humanReview || {};
+  if (review.decision === "reject") return `淘汰理由：${review.reason || "未填写"}`;
+  if (candidate.status === "paused") return `暂缓原因：${review.reason || "未填写"}`;
+  const gaps = (candidate.workflowStages || []).filter((stage) => stage.status === "blocked" || stage.status === "partial");
+  if (gaps.length) return gaps.map((stage) => `${stage.title}：${stage.note || stage.status}`).join("；");
+  return candidate.hypothesis || "证据已齐，等待你的审核动作。";
 }
 
 function renderDiscovery() {
@@ -1093,10 +1157,25 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (action === "discovery") { state.view = "discovery"; state.selectedId = null; render(); return; }
+    if (action === "board") { state.view = "board"; state.selectedId = null; render(); return; }
     if (action === "new") { showNewModal(); return; }
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
     if (action === "profile") { state.view = "profile"; render(); return; }
+    if (action === "apply-calibration") {
+      const candidate = currentCandidate();
+      if (!candidate) return;
+      const assumptions = { ...(candidate.assumptions || {}) };
+      const value = Number(button.dataset.value);
+      if (button.dataset.field === "returnReserveRate") assumptions.returnReserveRate = value;
+      else if (button.dataset.field === "adCost") assumptions.adCost = value;
+      await api(`/api/candidates/${encodeURIComponent(candidate.id)}`, { method: "PATCH", body: JSON.stringify({ assumptions }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("利润假设已按实测值更新。");
+      return;
+    }
     if (action === "mark-supplier") {
       const created = await api("/api/suppliers", {
         method: "POST",

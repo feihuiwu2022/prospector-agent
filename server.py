@@ -32,6 +32,7 @@ from prospector.platforms import MARKETS, default_platform_for_market, market_gr
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
     build_scale_plan,
+    calibrate_assumptions,
     evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
@@ -96,6 +97,7 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["pilot"] = result.get("pilot") or {}
     result["pilotReview"] = evaluate_pilot(result["pilot"], profile.get("pilotThresholds"))
     result["scalePlan"] = build_scale_plan(result, result["pilotReview"], profile, result["batchPlan"])
+    result["calibration"] = calibrate_assumptions(result.get("assumptions", {}), result["pilotReview"])
     result["resourceFit"] = resource_fit(result, profile)
     return result
 

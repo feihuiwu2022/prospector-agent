@@ -418,6 +418,49 @@ def evaluate_pilot(pilot: dict, thresholds: dict | None = None) -> dict:
 SCALE_COVER_DAYS = (30, 45, 60)
 
 
+def calibrate_assumptions(assumptions: dict, pilot_review: dict) -> list[dict]:
+    """Compare the recorded assumptions with the measured pilot numbers.
+
+    The suggestions are differences the operator can accept or ignore; the
+    system never rewrites the assumptions on its own.
+    """
+    if not pilot_review or not pilot_review.get("complete"):
+        return []
+    metrics = pilot_review.get("metrics") or {}
+    suggestions = []
+    ad_cost = metrics.get("adCostPerOrder")
+    if ad_cost is not None:
+        suggestions.append({
+            "field": "adCost",
+            "label": "广告成本（每件）",
+            "current": assumptions.get("adCost"),
+            "suggested": round(ad_cost, 2),
+            "unit": "销售币种 / 件",
+            "note": "用小测实测的每单广告成本替换估算值。",
+        })
+    refund_rate = metrics.get("refundRate")
+    if refund_rate is not None:
+        suggestions.append({
+            "field": "returnReserveRate",
+            "label": "退货/损耗预留",
+            "current": assumptions.get("returnReserveRate"),
+            "suggested": refund_rate,
+            "unit": "比例",
+            "note": "用小测实测退款率替换预留比例。",
+        })
+    net_margin = metrics.get("netMargin")
+    if net_margin is not None:
+        suggestions.append({
+            "field": "measuredNetMargin",
+            "label": "实测净利率（只做对照，不进公式）",
+            "current": None,
+            "suggested": net_margin,
+            "unit": "比例",
+            "note": "与利润模型算出的净利率对照，差距大时先查费用漏项。",
+        })
+    return suggestions
+
+
 def build_scale_plan(candidate: dict, pilot_review: dict, profile: dict, batch_plan: dict) -> dict:
     """Restocking options derived from the measured sales speed.
 

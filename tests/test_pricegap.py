@@ -456,6 +456,21 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(entry["to"], "completed")
         self.assertTrue(entry["at"])
 
+    def test_calibration_suggests_measured_values(self) -> None:
+        from prospector.domain import calibrate_assumptions
+
+        pilot = {
+            "complete": True,
+            "verdict": "达标",
+            "metrics": {"adCostPerOrder": 25.0, "refundRate": 0.04, "netMargin": 0.12},
+        }
+        suggestions = calibrate_assumptions({"adCost": 10, "returnReserveRate": 0.02}, pilot)
+        fields = {item["field"]: item for item in suggestions}
+        self.assertEqual(fields["adCost"]["suggested"], 25.0)
+        self.assertEqual(fields["returnReserveRate"]["suggested"], 0.04)
+        self.assertIn("measuredNetMargin", fields)
+        self.assertEqual(calibrate_assumptions({}, {"complete": False}), [])
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 
