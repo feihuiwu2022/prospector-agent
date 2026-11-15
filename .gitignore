@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+data/prospector.json
+data/prospector.tmp
+.codegraph/
+.DS_Store

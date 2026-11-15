@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0e1014" />
+    <title>拾品 · Agent 选品研究工作台</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <a class="brand" href="#" data-action="home" aria-label="拾品首页">
+          <span class="brand-mark"><span></span><span></span><span></span></span>
+          <span class="brand-name"><strong>拾品</strong><small>PROSPECTOR AGENT</small></span>
+        </a>
+        <nav class="mode-switch" id="mode-switch" aria-label="任务模式"></nav>
+        <div class="topbar-right" id="topbar-status"></div>
+      </header>
+
+      <div class="body">
+        <aside class="sidebar">
+          <section class="side-block">
+            <h2 class="side-title"><span><span class="step-no">1</span>选品策略</span></h2>
+            <div class="strategy-nav" id="strategy-nav"></div>
+          </section>
+          <section class="side-block">
+            <h2 class="side-title">
+              <span>最近会话</span>
+              <button class="tiny-plus" data-action="new-chat" aria-label="新建会话">＋</button>
+            </h2>
+            <div class="recent-list" id="recent-list"></div>
+          </section>
+          <section class="side-block side-nav">
+            <button data-action="discovery"><span class="nav-symbol">◈</span>数据源与运行</button>
+            <button data-action="profile"><span class="nav-symbol">◎</span>经营资源画像</button>
+          </section>
+          <div class="side-foot">
+            <div class="side-status" id="side-status"></div>
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="main-scroll">
+            <div id="notice" class="notice" role="status"></div>
+            <section id="app-content" class="content-area" aria-live="polite"></section>
+          </div>
+        </main>
+      </div>
+    </div>
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-root" aria-live="polite"></div>
+  </body>
+</html>
