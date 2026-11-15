@@ -156,6 +156,55 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(alert["direction"], "降价")
         self.assertAlmostEqual(alert["changePct"], -0.1429, places=3)
 
+    def test_promo_pages_are_marked_and_a_durable_gap_is_computed(self) -> None:
+        promo_rows = [
+            {
+                "ref": "S1",
+                "platformId": "taobao",
+                "title": "OPPO K13s 12GB+256GB 官方旗舰店",
+                "url": "https://item.taobao.com/item.htm?id=1",
+                "snippet": "百亿补贴 到手价 ¥1899 元，12GB+256GB",
+            },
+            {
+                "ref": "S2",
+                "platformId": "jd",
+                "title": "OPPO K13s 12+256 京东自营",
+                "url": "https://item.jd.com/2.html",
+                "snippet": "京东价 2099.00元，12GB+256GB 官方标配",
+            },
+        ]
+        pricegap.search_many = lambda plan: list(promo_rows)
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        group = next(item for item in result["groups"] if item["config"] == "12G+256G")
+        taobao = next(row for row in group["rows"] if row["platformId"] == "taobao")
+        self.assertTrue(taobao["promoSignals"])
+        # Only one platform has a non-promotional price, so no durable gap can be claimed.
+        self.assertIsNone(group["durableGap"])
+        self.assertTrue(any("促销" in caveat for caveat in group["caveats"]))
+
+    def test_store_pairs_name_the_cheapest_and_dearest_shop(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        group = next(item for item in result["groups"] if item["config"] == "12G+256G")
+        pairs = group["storePairs"]
+        self.assertTrue(pairs)
+        pair = pairs[0]
+        self.assertLessEqual(pair["sourcePrice"], pair["targetPrice"])
+        self.assertEqual(pair["gap"], round(pair["targetPrice"] - pair["sourcePrice"], 2))
+        self.assertTrue(pair["sourceSeller"])
+
+    def test_gap_history_compares_two_platforms_over_time(self) -> None:
+        history = [
+            {"platform": "京东", "config": "12G+256G", "price": 2099, "observedAt": "2026-11-01"},
+            {"platform": "淘宝 / 天猫", "config": "12G+256G", "price": 1899, "observedAt": "2026-11-01"},
+            {"platform": "京东", "config": "12G+256G", "price": 1999, "observedAt": "2026-11-08"},
+            {"platform": "淘宝 / 天猫", "config": "12G+256G", "price": 1899, "observedAt": "2026-11-08"},
+        ]
+        summary = pricegap.gap_history(history, "12G+256G", "淘宝 / 天猫", "京东")
+        self.assertEqual(summary["observations"], 2)
+        self.assertEqual(summary["series"][0]["gap"], 200.0)
+        self.assertEqual(summary["series"][1]["gap"], 100.0)
+        self.assertEqual(summary["medianGap"], 150.0)
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

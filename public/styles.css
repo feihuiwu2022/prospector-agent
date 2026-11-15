@@ -310,6 +310,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--line-2); color: var(--ink-3); background: var(--surface-2);
 }
 .strategy-card.active .tag { border-color: var(--brand-line); color: var(--brand); background: transparent; }
+.promo-tag { display: inline-block; margin-top: 3px; color: var(--amber); font-size: 9px; }
 
 /* ---------- 层级 2：六步工作流导轨 ---------- */
 .flow-rail-wrap { border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); padding: 12px 14px 10px; overflow-x: auto; }

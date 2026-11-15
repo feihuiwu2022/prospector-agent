@@ -19,6 +19,7 @@ Rules that keep the output honest:
 from __future__ import annotations
 
 import re
+import statistics
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
@@ -48,6 +49,14 @@ COLORS = ("黑", "白", "金", "蓝", "银", "灰", "粉", "绿", "紫", "红", 
 
 PRICE_WORDS_CNY = "价格 到手价 优惠 补贴 直播间"
 PRICE_WORDS_JPY = "価格 最安値 セール 税込 セール価格"
+
+# Words that suggest the visible price is a promotional price rather than the
+# everyday one.  A gap that only exists between promo pages is not a business.
+PROMO_KEYWORDS = (
+    "补贴", "券后", "到手", "秒杀", "限时", "清仓", "尾货", "直播", "赠品",
+    "立减", "直降", "折后", "百亿", "促销", "特价", "活动价", "秒杀价",
+    "セール", "特売", "セール価格", "値引き", "限定",
+)
 
 MAX_PLATFORMS = 8
 
@@ -142,6 +151,12 @@ def _seller_of(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _promo_signals(text: str) -> list[str]:
+    """Promotional wording found in a snippet, if any."""
+    lowered = str(text or "").casefold()
+    return [word for word in PROMO_KEYWORDS if word.casefold() in lowered]
+
+
 def _platform_rows(product: str, platform: dict, results: list[dict], currency: str) -> list[dict]:
     rows = []
     for source in results:
@@ -172,6 +187,7 @@ def _platform_rows(product: str, platform: dict, results: list[dict], currency: 
             "modelConfirmed": True,
             "secondHand": bool(platform.get("second_hand", False)),
             "seller": _seller_of(source.get("url", "")),
+            "promoSignals": _promo_signals(text),
             "sourceRef": source.get("ref", ""),
             "searchQuery": _as_text(source.get("query"), 240),
         })
@@ -234,6 +250,51 @@ def _group_rows(rows: list[dict]) -> list[dict]:
                 item["gapPct"] = 0.0
         gross_gap = round(highest["priceLow"] - lowest["priceLow"], 2) if comparable and lowest and highest else 0.0
         gross_gap_pct = round(gross_gap / lowest["priceLow"], 4) if comparable and lowest and lowest["priceLow"] else 0.0
+
+        # The same gap without promotional wording: a price gap that only
+        # exists between subsidy pages is not a repeatable business.
+        durable_by_platform: dict[str, dict] = {}
+        for item in first_hand:
+            if item.get("promoSignals"):
+                continue
+            current = durable_by_platform.get(item["platformId"])
+            if current is None or item["priceLow"] < current["priceLow"]:
+                durable_by_platform[item["platformId"]] = item
+        durable_gap = None
+        durable_gap_pct = None
+        if len(durable_by_platform) >= 2:
+            durable_values = [item["priceLow"] for item in durable_by_platform.values()]
+            durable_gap = round(max(durable_values) - min(durable_values), 2)
+            durable_gap_pct = round(durable_gap / min(durable_values), 4) if min(durable_values) else 0.0
+        promo_platforms = sorted({item["platform"] for item in first_hand if item.get("promoSignals")})
+        if promo_platforms and comparable:
+            caveats.append("可见低价里包含疑似促销页（" + "、".join(promo_platforms) + "），差价可能不可持续。")
+
+        # Store level pairs: which shop is cheapest and which shop is dearest.
+        store_pairs = []
+        by_platform: dict[str, dict] = {}
+        for item in first_hand:
+            current = by_platform.get(item["platformId"])
+            if current is None or item["priceLow"] < current["priceLow"]:
+                by_platform[item["platformId"]] = item
+        platform_ids = list(by_platform)
+        for index, left_id in enumerate(platform_ids):
+            for right_id in platform_ids[index + 1 :]:
+                left, right = by_platform[left_id], by_platform[right_id]
+                source, target = (left, right) if left["priceLow"] <= right["priceLow"] else (right, left)
+                store_pairs.append({
+                    "sourcePlatform": source["platform"],
+                    "sourceSeller": source.get("seller") or "未识别店铺",
+                    "sourcePrice": source["priceLow"],
+                    "sourcePromo": bool(source.get("promoSignals")),
+                    "targetPlatform": target["platform"],
+                    "targetSeller": target.get("seller") or "未识别店铺",
+                    "targetPrice": target["priceLow"],
+                    "targetPromo": bool(target.get("promoSignals")),
+                    "gap": round(target["priceLow"] - source["priceLow"], 2),
+                    "gapPct": round((target["priceLow"] - source["priceLow"]) / source["priceLow"], 4) if source["priceLow"] else 0.0,
+                })
+        store_pairs.sort(key=lambda row: row["gap"], reverse=True)
         sellers = []
         for item in items:
             seller = item.get("seller") or "未识别店铺"
@@ -257,6 +318,9 @@ def _group_rows(rows: list[dict]) -> list[dict]:
             "reasons": reasons,
             "caveats": caveats,
             "sellers": sellers,
+            "storePairs": store_pairs,
+            "durableGap": durable_gap,
+            "durableGapPct": durable_gap_pct,
             "rows": sorted(items, key=lambda item: item["priceLow"]),
             "lowestPlatform": lowest["platform"] if lowest else "",
             "highestPlatform": highest["platform"] if highest else "",
@@ -496,6 +560,44 @@ def run_price_gap_scan(product: str, market: str = "中国", source_country: str
     }
 
 
+def gap_history(history: list[dict], config: str, source_platform: str, target_platform: str) -> dict:
+    """Historical gap between two platforms for one configuration.
+
+    The question is whether today's gap is normal for this pair: a gap that
+    is far below its own history is usually a temporary subsidy rather than
+    an arbitrage.
+    """
+    by_date: dict[str, dict[str, float]] = {}
+    for item in history:
+        if item.get("config") != config or not item.get("price"):
+            continue
+        date_key = str(item.get("observedAt", ""))
+        bucket = by_date.setdefault(date_key, {})
+        platform = item.get("platform", "")
+        if platform not in bucket or item["price"] < bucket[platform]:
+            bucket[platform] = item["price"]
+    series = []
+    for date_key in sorted(by_date):
+        bucket = by_date[date_key]
+        if source_platform in bucket and target_platform in bucket:
+            gap = round(bucket[target_platform] - bucket[source_platform], 2)
+            series.append({
+                "date": date_key,
+                "sourcePrice": bucket[source_platform],
+                "targetPrice": bucket[target_platform],
+                "gap": gap,
+                "gapPct": round(gap / bucket[source_platform], 4) if bucket[source_platform] else 0.0,
+            })
+    gaps = [row["gap"] for row in series]
+    return {
+        "series": series,
+        "observations": len(series),
+        "medianGap": round(statistics.median(gaps), 2) if gaps else None,
+        "minGap": min(gaps) if gaps else None,
+        "maxGap": max(gaps) if gaps else None,
+    }
+
+
 PRICE_ALERT_THRESHOLD = 0.05
 
 
@@ -574,6 +676,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "targetUrl": item.get("targetUrl", ""),
             "targetTitle": item.get("targetTitle", ""),
             "targetColor": item.get("targetColor", ""),
+            "gapValue": item["grossGap"],
             "gapText": f"同配置毛差价 {item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）",
         })
     cross = (result.get("crossBorder") or {}).get("pairs") or []
@@ -593,8 +696,22 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "targetUrl": pair.get("targetUrl", ""),
             "targetTitle": pair.get("targetTitle", ""),
             "targetColor": pair.get("targetColor", ""),
+            "gapValue": None,
             "gapText": "两侧币种不同，需要人工填汇率、头程与关税后才能算贡献利润",
         })
+
+    history = result.get("history", []) or []
+    for spec in specs:
+        spec["gapHistory"] = gap_history(history, spec["config"], spec["sourcePlatform"], spec["targetPlatform"])
+        median = spec["gapHistory"].get("medianGap")
+        current = spec.get("gapValue")
+        spec["gapContext"] = ""
+        if median and current is not None and median > 0:
+            ratio = current / median
+            if ratio < 0.7:
+                spec["gapContext"] = f"本次差价 {current} 明显低于这对平台的历史中位差价 {median}，更可能是限时补贴或异常低价。"
+            elif ratio > 1.3:
+                spec["gapContext"] = f"本次差价 {current} 高于这对平台的历史中位差价 {median}，值得复核是否同款或页面口径不同。"
 
     stages = {stage["id"]: stage for stage in WORKFLOW_STAGES}
     candidates = []
@@ -680,6 +797,8 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 "brand": product.split(" ")[0] if product else "",
                 "model": product,
                 "observedAt": observed,
+                "gapHistory": spec.get("gapHistory", {}),
+                "gapContext": spec.get("gapContext", ""),
             },
             "scores": {},
             "tasks": build_tasks(candidate_id, "active_research"),
@@ -696,7 +815,8 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 + [
                     f"{alert['platform']} 同配置报价较上次{'下降' if alert.get('changePct', 0) < 0 else '上升'} {abs(alert.get('changePct', 0)) * 100:.1f}%，需确认是否同款。"
                     for alert in (result.get("historySummary", {}) or {}).get("alerts", [])[:3]
-                ],
+                ]
+                + ([spec["gapContext"]] if spec.get("gapContext") else []),
                 "evidenceIds": [row["id"] for row in evidence],
                 "generatedAt": _now_iso(),
                 "model": "price_gap_scan",

@@ -277,7 +277,7 @@ function renderPriceGapReport(run) {
     const rows = (group.rows || []).map((row) => `<tr>
       <td><b>${esc(row.platform)}</b>${row.secondHand ? `<small>二手/个人定价</small>` : ""}</td>
       <td>${esc(row.configKey || "配置未识别")}${row.color ? ` · ${esc(row.color)}` : ""}</td>
-      <td>${money(row.priceLow)}${row.priceHigh && row.priceHigh !== row.priceLow ? `<small>~ ${money(row.priceHigh)}</small>` : ""}</td>
+      <td>${money(row.priceLow)}${row.priceHigh && row.priceHigh !== row.priceLow ? `<small>~ ${money(row.priceHigh)}</small>` : ""}${(row.promoSignals || []).length ? `<small class="promo-tag">疑似促销：${row.promoSignals.join("、")}</small>` : ""}</td>
       <td>${row.gapToLowest ? `${money(row.gapToLowest)}（${(Number(row.gapPct || 0) * 100).toFixed(1)}%）` : "—"}</td>
       <td>${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">来源 ↗</a>` : "—"}</td>
     </tr>`).join("");
@@ -287,7 +287,10 @@ function renderPriceGapReport(run) {
     const caveats = (group.caveats || []).length ? `<ul>${group.caveats.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : "";
     const sellers = (group.sellers || []).map((seller) => `<tr><td><b>${esc(seller.seller)}</b></td><td>${esc(seller.platform)}</td><td>${money(seller.priceLow)}</td><td>${seller.listingCount > 1 ? `${seller.listingCount} 个页面` : "1 个页面"}</td></tr>`).join("");
     const sellerBlock = sellers ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>店铺 / 页面域名</th><th>平台</th><th>可见报价</th><th>页面数</th></tr></thead><tbody>${sellers}</tbody></table></div>` : "";
-    return `<div class="report-list"><b>${head}</b>${caveats}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>配置</th><th>可见报价</th><th>与同配置最低价差价</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>${sellerBlock ? `<div class="bottom-note"><span>ⓘ</span><span><strong>同款店铺分布：</strong>同一配置在不同店铺的可见报价；最低价通常来自补贴或清库存动作，不等于可持续拿货价。</span></div>${sellerBlock}` : ""}</div>`;
+    const pairRows = (group.storePairs || []).map((pair) => `<tr><td>${esc(pair.sourcePlatform)}<small>${esc(pair.sourceSeller)}</small></td><td>${money(pair.sourcePrice)}${pair.sourcePromo ? "<small>疑似促销</small>" : ""}</td><td>${esc(pair.targetPlatform)}<small>${esc(pair.targetSeller)}</small></td><td>${money(pair.targetPrice)}${pair.targetPromo ? "<small>疑似促销</small>" : ""}</td><td>${money(pair.gap)}（${(Number(pair.gapPct || 0) * 100).toFixed(1)}%）</td></tr>`).join("");
+    const pairBlock = pairRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>低价一侧</th><th>报价</th><th>高价一侧</th><th>报价</th><th>店间差价</th></tr></thead><tbody>${pairRows}</tbody></table></div>` : "";
+    const durableLine = group.durableGap != null ? `去除疑似促销页后，同配置差价 ${money(group.durableGap)}（${(Number(group.durableGapPct || 0) * 100).toFixed(1)}%）` : "没有足够的非促销页面，无法估算可持续差价";
+    return `<div class="report-list"><b>${head}</b>${caveats}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>配置</th><th>可见报价</th><th>与同配置最低价差价</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>${pairBlock ? `<div class="bottom-note"><span>ⓘ</span><span><strong>店间差价：</strong>左边是低价店铺，右边是高价店铺。${esc(durableLine)}。</span></div>${pairBlock}` : ""}${sellerBlock ? `<div class="bottom-note"><span>ⓘ</span><span><strong>同款店铺分布：</strong>同一配置在不同店铺的可见报价；最低价通常来自补贴或清库存动作，不等于可持续拿货价。</span></div>${sellerBlock}` : ""}</div>`;
   }).join("");
   const summaryRows = (report.platformSummary || []).map((item) => `<tr>
     <td><b>${esc(item.platform)}</b></td>
@@ -480,6 +483,19 @@ function renderDetail() {
   `;
 }
 
+function renderPriceGapContext(candidate) {
+  const pairing = candidate.priceGap || {};
+  const history = pairing.gapHistory || {};
+  const series = history.series || [];
+  const rows = series.map((row) => `<tr><td>${esc(row.date)}</td><td>${Number(row.sourcePrice).toLocaleString("zh-CN")}</td><td>${Number(row.targetPrice).toLocaleString("zh-CN")}</td><td>${Number(row.gap).toLocaleString("zh-CN")}（${(Number(row.gapPct || 0) * 100).toFixed(1)}%）</td></tr>`).join("");
+  const median = history.medianGap == null ? "暂无历史可比记录" : `历史中位差价 ${Number(history.medianGap).toLocaleString("zh-CN")}（${history.observations} 次可比观察）`;
+  return `<section class="panel"><div class="panel-head"><h3>价差背景</h3><small>公开页面报价记录，不是价格承诺</small></div>
+    <p style="margin:0 0 8px;color:#77837a;font-size:9px;line-height:1.7">低价一侧：${esc(pairing.sourcePlatform || "")} ${esc(pairing.sourceVariant || "")} ${Number(pairing.sourcePrice || 0).toLocaleString("zh-CN")} ${esc(pairing.sourceCurrency || "")}；高价一侧：${esc(pairing.targetPlatform || "")} ${esc(pairing.targetVariant || "")} ${Number(pairing.targetPrice || 0).toLocaleString("zh-CN")} ${esc(pairing.targetCurrency || "")}。${esc(median)}。</p>
+    ${pairing.gapContext ? `<div class="inline-alert">${esc(pairing.gapContext)}</div>` : ""}
+    ${rows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>观察日期</th><th>低价侧报价</th><th>高价侧报价</th><th>当时差价</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="bottom-note"><span>ⓘ</span><span>这个商品还没有可比的两次观察，再跑一次比价就能看到历史差价区间。</span></div>`}
+  </section>`;
+}
+
 function scoreRows(candidate) {
   const evidenceDimensions = {
     potential: ["demand", "competition", "margin"],
@@ -515,6 +531,7 @@ function renderOverview(candidate) {
     <div class="detail-grid">
       <div>
         <section class="panel"><div class="panel-head"><div><h3>Agent 选品判断</h3><small>${esc(candidate.strategyTitle || "指定商品研究")}${candidate.agentDiscovery?.confidence ? ` · 信号置信度 ${esc(candidate.agentDiscovery.confidence)}` : ""}</small></div><span class="status-pill">${statusLabel(candidate.status)}</span></div><div class="hypothesis-box">${esc(statusNote)}</div>${research ? `<div class="agent-final-review"><b>Agent 初筛：${({ keep: "进入人工审核", hold: "补证后审核", reject: "暂缓" })[research.recommendation] || "待审核"}</b><p>${esc(research.recommendationReason)}</p></div>` : ""}<div style="display:flex;gap:7px;margin-top:11px"><button class="button-secondary" data-action="tab" data-tab="evidence">查看来源证据</button><button class="button-quiet" data-action="tab" data-tab="tasks">查看 Agent 任务 →</button></div></section>
+        ${candidate.priceGap ? renderPriceGapContext(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
         <section class="panel"><div class="panel-head"><h3>Agent 研究队列</h3><small>${candidate.tasks.length} 项专业任务</small></div><div class="task-list">${candidate.tasks.slice(0, 5).map(renderTaskRow).join("")}</div><div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="text-link" data-action="tab" data-tab="tasks">查看全部任务 →</button></div></section>
