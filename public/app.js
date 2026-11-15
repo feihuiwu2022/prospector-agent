@@ -268,6 +268,65 @@ function renderCompetitorReport(run) {
   return `<section class="chat-result-card"><div class="chat-result-head"><b>竞品扫描结果</b><span>${esc(report.scope || "")}</span></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${rows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>竞品/平台</th><th>渠道</th><th>定位</th><th>价格线索</th><th>差异/反馈线索</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="inline-alert">目前没有足够的带来源竞品行。可以补充品牌、类目词或目标平台再运行。</div>`}${themes ? `<div class="report-list"><b>共性趋势</b><ul>${themes}</ul></div>` : ""}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条搜索线索 · ${esc(run.model || "MiniMax Agent")} · “国内货源对照”行的价格来自国内电商公开页面，不等于源头成本</small></section>`;
 }
 
+function priceGapMarkdown(run) {
+  const report = run.report || {};
+  const currency = report.currency || "CNY";
+  const money = (value) => (value == null ? "—" : `${Number(value).toLocaleString("zh-CN")} ${currency}`);
+  const lines = [];
+  lines.push(`# 同品跨平台比价 · ${report.scope || ""}`);
+  lines.push("");
+  lines.push(report.summary || run.summary || "");
+  lines.push("");
+  lines.push("## 同配置分组");
+  for (const group of report.groups || []) {
+    lines.push("");
+    lines.push(`### ${group.config || "未识别配置"}`);
+    lines.push(group.comparable
+      ? `同配置毛差价 ${money(group.grossGap)}（${(Number(group.grossGapPct || 0) * 100).toFixed(1)}%）· 最低 ${group.lowestPlatform} / 最高 ${group.highestPlatform}`
+      : `不可对比：${(group.reasons || []).join("；")}`);
+    for (const caveat of group.caveats || []) lines.push(`- 注意：${caveat}`);
+    lines.push("");
+    lines.push("| 平台 | 配置 | 可见报价 | 与最低价差价 | 促销信号 | 来源 |");
+    lines.push("|---|---|---:|---:|---|---|");
+    for (const row of group.rows || []) {
+      lines.push(`| ${row.platform} | ${row.configKey || "配置未识别"} | ${money(row.priceLow)} | ${money(row.gapToLowest)} | ${(row.promoSignals || []).join("、") || "—"} | ${row.url} |`);
+    }
+    for (const pair of group.storePairs || []) {
+      lines.push("");
+      lines.push(`- 店间差价：${pair.sourcePlatform}（${pair.sourceSeller}）${money(pair.sourcePrice)} → ${pair.targetPlatform}（${pair.targetSeller}）${money(pair.targetPrice)}，差 ${money(pair.gap)}（${(Number(pair.gapPct || 0) * 100).toFixed(1)}%）`);
+    }
+  }
+  const profit = report.platformProfit || {};
+  if ((profit.rows || []).length) {
+    lines.push("");
+    lines.push("## 每家平台的单件贡献利润");
+    lines.push("");
+    lines.push("| 卖出平台 | 采购价 | 本平台报价 | 毛差价 | 贡献利润 |");
+    lines.push("|---|---:|---:|---:|---:|");
+    for (const row of profit.rows) {
+      lines.push(`| ${row.platform} | ${money(row.purchasePrice)}（${row.purchasePlatform}） | ${money(row.sellPrice)} | ${money(row.grossGap)} | ${row.contributionProfit == null ? "待补费用" : `${money(row.contributionProfit)}（${(Number(row.contributionMargin || 0) * 100).toFixed(1)}%）`} |`);
+    }
+  }
+  const history = report.historySummary || {};
+  if ((history.series || []).length) {
+    lines.push("");
+    lines.push("## 历史观察");
+    lines.push("");
+    lines.push("| 平台 | 配置 | 最近报价 | 较上次 | 观察次数 |");
+    lines.push("|---|---|---:|---:|---:|");
+    for (const row of history.series) {
+      const change = row.changePct == null ? "—" : `${(Number(row.changePct) * 100).toFixed(1)}%`;
+      lines.push(`| ${row.platform} | ${row.config || "配置未识别"} | ${row.latestPrice == null ? "—" : `${Number(row.latestPrice).toLocaleString("zh-CN")} ${row.latestCurrency || ""}`} | ${change} | ${row.observations} |`);
+    }
+  }
+  lines.push("");
+  lines.push("## 仍需人工核实");
+  for (const gap of report.gaps || []) lines.push(`- ${gap}`);
+  lines.push("");
+  lines.push("> 价格来自公开网页搜索摘要，未打开商品页核实；差价未扣佣金、广告、履约与退货，不是利润。本报告不构成采购建议。");
+  return lines.join("\n");
+}
+
 function renderPriceGapReport(run) {
   const report = run.report || {};
   const groups = report.groups || [];
@@ -302,7 +361,8 @@ function renderPriceGapReport(run) {
   const crossBorder = report.crossBorder ? `<div class="inline-alert">${esc(report.crossBorder.note)}</div>` : "";
   const historyBlocks = renderPriceHistory(report.history || []);
   const alertBlocks = renderPriceAlerts(report.historySummary?.alerts || []);
-  return `<section class="chat-result-card"><div class="chat-result-head"><b>同品跨平台比价</b><span>${esc(report.scope || "")}</span></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${crossBorder}${summaryRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>可见报价区间</th><th>配置</th><th>说明</th></tr></thead><tbody>${summaryRows}</tbody></table></div>` : ""}${groupBlocks || `<div class="inline-alert">没有找到带型号与价格的公开页面。可以换一个更通用的商品名再试。</div>`}${historyBlocks}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条可见报价 · 价格来自公开搜索摘要，未打开商品页核实 · 差价未扣佣金、广告、履约与退货，不是利润</small></section>`;
+  const profitBlock = renderPlatformProfit(report.platformProfit || {});
+  return `<section class="chat-result-card"><div class="chat-result-head"><b>同品跨平台比价</b><span>${esc(report.scope || "")}</span><button class="button-quiet" data-action="download-pricegap" data-id="${esc(run.id || "")}">导出 Markdown</button></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${crossBorder}${summaryRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>可见报价区间</th><th>配置</th><th>说明</th></tr></thead><tbody>${summaryRows}</tbody></table></div>` : ""}${groupBlocks || `<div class="inline-alert">没有找到带型号与价格的公开页面。可以换一个更通用的商品名再试。</div>`}${historyBlocks}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条可见报价 · 价格来自公开搜索摘要，未打开商品页核实 · 差价未扣佣金、广告、履约与退货，不是利润</small></section>`;
 }
 
 function renderPriceHistory(history) {
@@ -326,6 +386,21 @@ function renderPriceHistory(history) {
     return `<tr><td><b>${esc(latest.platform)}</b><small>${esc(latest.config || "配置未识别")}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${esc(change)}</td><td>${sorted.length} 次观察</td></tr>`;
   }).join("");
   return `<div class="report-list"><b>历史观察（同一商品的公开页面报价记录）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>最近可见报价</th><th>观察日期</th><th>较上次</th><th>次数</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function renderPlatformProfit(profit) {
+  const rows = (profit.rows || []).map((row) => `<tr>
+    <td><b>${esc(row.platform)}</b><small>${esc(row.config || "")}</small>${row.promo ? "<small class=\"promo-tag\">疑似促销价</small>" : ""}</td>
+    <td>${Number(row.purchasePrice).toLocaleString("zh-CN")} <small>${esc(row.purchasePlatform || "")}</small></td>
+    <td>${Number(row.sellPrice).toLocaleString("zh-CN")}</td>
+    <td>${Number(row.grossGap).toLocaleString("zh-CN")}</td>
+    <td>${row.contributionProfit == null ? `<span class="status-pill wait">待补费用</span>` : `${Number(row.contributionProfit).toLocaleString("zh-CN")} ${esc(row.currency || "")}<small>${(Number(row.contributionMargin || 0) * 100).toFixed(1)}%</small>`}</td>
+  </tr>`).join("");
+  if (!rows) return "";
+  const missing = (profit.missingFields || []).length
+    ? `<div class="inline-alert">还缺比价假设：${profit.missingFields.join("、")}。补齐后这里会给出每家平台的单件贡献利润。</div>`
+    : "";
+  return `<div class="report-list"><b>每家平台的单件贡献利润</b>${missing}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>卖出平台</th><th>采购价（最低价平台）</th><th>本平台报价</th><th>毛差价</th><th>贡献利润</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">${esc(profit.note || "")}</small></div>`;
 }
 
 function renderPriceAlerts(alerts) {
@@ -665,6 +740,7 @@ function renderProfile() {
   const market = profile.market || "日本";
   const sourceCountry = profile.sourcingCountry || "中国";
   const sourcingOptions = sourcingPlatforms(sourceCountry);
+  const gapCosts = (profile.priceGapAssumptions && typeof profile.priceGapAssumptions === "object") ? profile.priceGapAssumptions : { referralRate: "", adCost: "", fulfillmentCost: "", returnReserveRate: "" };
   const marketChannels = salesPlatforms(market);
   const platformOptions = marketChannels.length
     ? marketChannels.map((item) => `<option value="${esc(item.name)}" ${item.name === profile.platform ? "selected" : ""}>${esc(item.name)}</option>`).join("")
@@ -685,7 +761,15 @@ function renderProfile() {
       <div class="field"><label>风险偏好</label><select name="riskTolerance"><option value="" ${!profile.riskTolerance ? "selected" : ""}>未设置</option><option ${profile.riskTolerance === "低风险" ? "selected" : ""}>低风险</option><option ${profile.riskTolerance === "中等风险" ? "selected" : ""}>中等风险</option><option ${profile.riskTolerance === "较高风险" ? "selected" : ""}>较高风险</option></select></div>
       <div class="field"><label>库存承受度</label><select name="inventoryTolerance"><option value="" ${!profile.inventoryTolerance ? "selected" : ""}>未设置</option><option ${profile.inventoryTolerance === "不囤货" ? "selected" : ""}>不囤货</option><option ${profile.inventoryTolerance === "允许少量囤货" ? "selected" : ""}>允许少量囤货</option><option ${profile.inventoryTolerance === "可批量备货" ? "selected" : ""}>可批量备货</option></select></div>
       <div class="field"><label>供应链能力</label><input name="sourcingCapabilities" value="${esc(profile.sourcingCapabilities || "")}" placeholder="工厂、验货、定制等" /></div>
-      <p class="form-help">目标市场决定 Agent 去哪些销售平台核对竞品与价格带；货源平台决定 Agent 去找哪些源头页面。未勾选时使用该来源国的默认集合。这些平台当前只提供公开页面线索，正式报价与 MOQ 仍需另行授权或人工确认。</p>
+      <div class="field full"><label>比价假设（把毛差价换算成单件贡献利润）</label>
+        <div class="form-grid">
+          <div class="field"><label>平台佣金率（%）</label><input name="priceGapReferralRate" type="number" min="0" step="0.1" value="${esc(gapCosts.referralRate === "" ? "" : Number(gapCosts.referralRate) * 100)}" placeholder="例如 5" /></div>
+          <div class="field"><label>广告成本（每件）</label><input name="priceGapAdCost" type="number" min="0" step="0.01" value="${esc(gapCosts.adCost === "" ? "" : gapCosts.adCost)}" placeholder="例如 20" /></div>
+          <div class="field"><label>履约与运费（每件）</label><input name="priceGapFulfillmentCost" type="number" min="0" step="0.01" value="${esc(gapCosts.fulfillmentCost === "" ? "" : gapCosts.fulfillmentCost)}" placeholder="例如 15" /></div>
+          <div class="field"><label>退货/损耗预留（%）</label><input name="priceGapReturnReserveRate" type="number" min="0" step="0.1" value="${esc(gapCosts.returnReserveRate === "" ? "" : Number(gapCosts.returnReserveRate) * 100)}" placeholder="例如 2" /></div>
+        </div>
+      </div>
+      <p class="form-help">目标市场决定 Agent 去哪些销售平台核对竞品与价格带；货源平台决定 Agent 去找哪些源头页面。未勾选时使用该来源国的默认集合。这些平台当前只提供公开页面线索，正式报价与 MOQ 仍需另行授权或人工确认。比价假设只在你填写后用于换算单件贡献利润，留空即显示“待补费用”。</p>
       <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存经营画像</button></div></div>
     </form></section><aside class="resource-aside"><div class="hero-overline">Scoring policy</div><h3>画像做适配，不替你做决定。</h3><p>基础机会分用于比较市场、利润和风险证据。你的预算、备货能力和风险偏好单独显示，帮助你理解“机会不错”是否等于“现在适合做”。</p><ul><li>${esc(market)}销售 · ${esc(profile.platform || "待确认平台")} 优先</li><li>${esc(sourceCountry)}采购 · ${esc(profile.fulfillment || "履约待确认")}</li><li>预算示例 ¥100,000 CNY，可修改或清空</li><li>目标市场可切到中国或海外，平台清单随市场变化</li></ul></aside></div>
   `;
@@ -914,6 +998,18 @@ document.addEventListener("click", async (event) => {
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ status: action === "pause" ? "paused" : "researching" }) });
       await refresh(); state.view = "detail"; toast(action === "pause" ? "研究已暂停。" : "研究已恢复。"); return;
     }
+    if (action === "download-pricegap") {
+      const run = (state.discoveryRuns || []).find((item) => item.id === button.dataset.id);
+      if (!run || !run.report) { toast("这份比价结果已经不在本地记录里。", true); return; }
+      const blob = new Blob([priceGapMarkdown(run)], { type: "text/markdown;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${(run.report.scope || "price-gap").replace(/[\\/:*?"<>|]/g, "-")}.md`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast("比价报告已导出；价格仍需点开来源核实。");
+      return;
+    }
     if (action === "download-report") {
       const candidate = currentCandidate();
       const blob = new Blob([reportMarkdown(candidate)], { type: "text/markdown;charset=utf-8" });
@@ -1051,6 +1147,16 @@ document.addEventListener("submit", async (event) => {
       const profile = Object.fromEntries(data.entries());
       profile.budgetCny = profile.budgetCny === "" ? null : Number(profile.budgetCny);
       profile.sourcingPlatforms = data.getAll("sourcingPlatforms").map(String);
+      const gapAssumptions = {};
+      const referral = String(data.get("priceGapReferralRate") || "").trim();
+      const adCost = String(data.get("priceGapAdCost") || "").trim();
+      const fulfillment = String(data.get("priceGapFulfillmentCost") || "").trim();
+      const returnRate = String(data.get("priceGapReturnReserveRate") || "").trim();
+      gapAssumptions.referralRate = referral === "" ? "" : Number(referral) / 100;
+      gapAssumptions.adCost = adCost === "" ? "" : Number(adCost);
+      gapAssumptions.fulfillmentCost = fulfillment === "" ? "" : Number(fulfillment);
+      gapAssumptions.returnReserveRate = returnRate === "" ? "" : Number(returnRate) / 100;
+      profile.priceGapAssumptions = gapAssumptions;
       await api("/api/profile", { method: "PATCH", body: JSON.stringify(profile) });
       await refresh(); state.view = "profile"; render(); toast("经营画像已保存；基础机会分不变。"); return;
     }

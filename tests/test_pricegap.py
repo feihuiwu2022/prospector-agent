@@ -205,6 +205,25 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(summary["series"][1]["gap"], 100.0)
         self.assertEqual(summary["medianGap"], 150.0)
 
+    def test_platform_profit_needs_cost_assumptions(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        without = pricegap.compute_platform_profit(result["groups"], {}, "CNY")
+        self.assertFalse(without["complete"])
+        self.assertIn("referralRate", without["missingFields"])
+        self.assertTrue(without["rows"])
+        self.assertIsNone(without["rows"][0]["contributionProfit"])
+
+        with_costs = pricegap.compute_platform_profit(
+            result["groups"],
+            {"referralRate": 0.05, "adCost": 20, "fulfillmentCost": 15, "returnReserveRate": 0.02},
+            "CNY",
+        )
+        self.assertTrue(with_costs["complete"])
+        row = next(item for item in with_costs["rows"] if item["platform"] == "京东")
+        expected = 2099 - 1899 - 2099 * 0.05 - 20 - 15 - 2099 * 0.02
+        self.assertAlmostEqual(row["contributionProfit"], round(expected, 2), places=1)
+        self.assertEqual(row["purchasePlatform"], "淘宝 / 天猫")
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

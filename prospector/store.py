@@ -18,6 +18,14 @@ DEFAULT_PROFILE = {
     "inventoryTolerance": "允许少量囤货",
     "riskTolerance": "中等风险",
     "sourcingCapabilities": "",
+    # Cost assumptions used to turn a visible price gap into a contribution
+    # estimate.  Empty values mean "not decided yet", never zero.
+    "priceGapAssumptions": {
+        "referralRate": "",
+        "adCost": "",
+        "fulfillmentCost": "",
+        "returnReserveRate": "",
+    },
 }
 
 DEFAULT_STATE = {

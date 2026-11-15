@@ -18,7 +18,12 @@ from uuid import uuid4
 from prospector.agents import build_tasks, now_iso, refresh_task_statuses
 from prospector.agent_discovery import run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
-from prospector.agent_pricegap import build_price_gap_candidates, run_price_gap_scan, summarize_price_history
+from prospector.agent_pricegap import (
+    build_price_gap_candidates,
+    compute_platform_profit,
+    run_price_gap_scan,
+    summarize_price_history,
+)
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
@@ -530,6 +535,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 result["history"] = self._record_price_observations(prompt, result)
                 result["historySummary"] = summarize_price_history(result["history"])
+                result["platformProfit"] = compute_platform_profit(
+                    result.get("groups", []),
+                    profile.get("priceGapAssumptions", {}) or {},
+                    result.get("currency", "CNY"),
+                )
                 candidates = build_price_gap_candidates(prompt, result, profile)
                 final_status = result.get("status", "needs_manual_validation")
                 summary = result.get("summary", "同品比价完成。")

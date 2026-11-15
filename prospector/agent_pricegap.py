@@ -598,6 +598,74 @@ def gap_history(history: list[dict], config: str, source_platform: str, target_p
     }
 
 
+PRICE_GAP_COST_FIELDS = ("referralRate", "adCost", "fulfillmentCost", "returnReserveRate")
+
+
+def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str) -> dict:
+    """Per selling platform: what a unit would earn on the cheapest source.
+
+    The purchase price is the lowest visible price of the same configuration
+    across all platforms.  Every fee has to come from the operator; when a
+    fee is missing the row says so instead of assuming zero.
+    """
+    missing = [key for key in PRICE_GAP_COST_FIELDS if assumptions.get(key) in (None, "")]
+    rows = []
+    for group in groups:
+        if not group.get("comparable"):
+            continue
+        config = group["config"]
+        rows_in_group = [row for row in group["rows"] if not row["secondHand"]]
+        if len(rows_in_group) < 2:
+            continue
+        purchase_row = min(rows_in_group, key=lambda row: row["priceLow"])
+        for platform_id in {row["platformId"] for row in rows_in_group}:
+            platform_rows = [row for row in rows_in_group if row["platformId"] == platform_id]
+            sell_row = min(platform_rows, key=lambda row: row["priceLow"])
+            if sell_row["platformId"] == purchase_row["platformId"]:
+                continue
+            row = {
+                "config": config,
+                "platform": sell_row["platform"],
+                "platformId": platform_id,
+                "sellPrice": sell_row["priceLow"],
+                "purchasePrice": purchase_row["priceLow"],
+                "purchasePlatform": purchase_row["platform"],
+                "grossGap": round(sell_row["priceLow"] - purchase_row["priceLow"], 2),
+                "currency": currency,
+                "promo": bool(sell_row.get("promoSignals")),
+                "missingFields": list(missing),
+                "contributionProfit": None,
+                "contributionMargin": None,
+            }
+            if not missing:
+                commission = sell_row["priceLow"] * float(assumptions["referralRate"])
+                returns = sell_row["priceLow"] * float(assumptions["returnReserveRate"])
+                ad_cost = float(assumptions["adCost"])
+                fulfillment = float(assumptions["fulfillmentCost"])
+                contribution = sell_row["priceLow"] - purchase_row["priceLow"] - commission - ad_cost - fulfillment - returns
+                row.update({
+                    "costs": {
+                        "采购成本": purchase_row["priceLow"],
+                        "平台佣金": round(commission, 2),
+                        "广告": round(ad_cost, 2),
+                        "履约/运费": round(fulfillment, 2),
+                        "退货预留": round(returns, 2),
+                    },
+                    "contributionProfit": round(contribution, 2),
+                    "contributionMargin": round(contribution / sell_row["priceLow"], 4) if sell_row["priceLow"] else 0.0,
+                })
+            rows.append(row)
+    rows.sort(key=lambda item: item.get("contributionProfit", item["grossGap"]), reverse=True)
+    return {
+        "rows": rows,
+        "missingFields": missing,
+        "complete": not missing,
+        "note": (
+            "每行假设在最低价平台按可见价拿货、在该平台卖出；费用来自经营画像里的比价假设，未填时不给利润。"
+        ),
+    }
+
+
 PRICE_ALERT_THRESHOLD = 0.05
 
 
