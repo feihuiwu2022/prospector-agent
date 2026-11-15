@@ -415,6 +415,87 @@ def evaluate_pilot(pilot: dict, thresholds: dict | None = None) -> dict:
     }
 
 
+SCALE_COVER_DAYS = (30, 45, 60)
+
+
+def build_scale_plan(candidate: dict, pilot_review: dict, profile: dict, batch_plan: dict) -> dict:
+    """Restocking options derived from the measured sales speed.
+
+    The only input that is not an assumption is the measured daily sales
+    from the pilot.  Cover days, budget and safety stock are shown as the
+    operator's own choices, and every order still needs explicit approval.
+    """
+    metrics = (pilot_review or {}).get("metrics") or {}
+    if not pilot_review or not pilot_review.get("complete") or pilot_review.get("verdict") != "达标":
+        return {
+            "complete": False,
+            "reason": "小测尚未达标，不生成扩量方案。",
+            "tiers": [],
+            "risks": ["先把小测做到门槛之内，再谈扩量。"],
+        }
+    window_days = metrics.get("windowDays") or 0
+    orders = metrics.get("orders") or 0
+    if window_days <= 0 or orders <= 0:
+        return {"complete": False, "reason": "缺少测试窗口或订单数，无法估算日均销量。", "tiers": [], "risks": []}
+
+    daily_units = orders / window_days
+    refund_rate = metrics.get("refundRate") or 0
+    assumptions = candidate.get("assumptions", {})
+    purchase_price = (batch_plan or {}).get("cashUsed")
+    unit_cost = None
+    profit = candidate.get("profit") or {}
+    if profit.get("purchasePriceInSellingCurrency") is not None:
+        unit_cost = profit["purchasePriceInSellingCurrency"]
+    elif assumptions.get("purchasePrice") not in (None, ""):
+        try:
+            unit_cost = float(assumptions["purchasePrice"])
+        except (TypeError, ValueError):
+            unit_cost = None
+    currency = profit.get("currency") or assumptions.get("sellingCurrency") or ""
+    budget = profile.get("budgetCny")
+    tiers = []
+    for cover_days in SCALE_COVER_DAYS:
+        units = int(round(daily_units * cover_days))
+        safety = int(round(units * refund_rate))
+        total_units = units + safety
+        cash_used = round(total_units * unit_cost, 2) if unit_cost is not None else None
+        row = {
+            "label": f"备货 {cover_days} 天",
+            "coverDays": cover_days,
+            "salesUnits": units,
+            "safetyUnits": safety,
+            "totalUnits": total_units,
+            "cashUsed": cash_used,
+            "currency": currency,
+            "dailyUnits": round(daily_units, 2),
+            "withinBudget": None,
+        }
+        if cash_used is not None and currency == "CNY" and budget not in (None, ""):
+            try:
+                row["withinBudget"] = cash_used <= float(budget)
+                row["budget"] = float(budget)
+            except (TypeError, ValueError):
+                row["withinBudget"] = None
+        tiers.append(row)
+    risks = [
+        f"日均销量 {daily_units:.2f} 件来自你录入的小测窗口（{window_days} 天、{orders} 单），不是预测。",
+        "起订量与交期未确认，备货量可能被供应商拒绝或延后。",
+    ]
+    if refund_rate:
+        risks.append(f"已按实测退款率 {refund_rate * 100:.1f}% 计入安全库存 {int(round(daily_units * 60 * refund_rate))} 件（60 天档）。")
+    if any(row.get("withinBudget") is False for row in tiers):
+        risks.append("部分档位的资金占用已超过画像里的可投入预算。")
+    return {
+        "complete": True,
+        "dailyUnits": round(daily_units, 2),
+        "refundRate": refund_rate,
+        "currency": currency,
+        "tiers": tiers,
+        "risks": risks,
+        "note": "这是备货量与资金占用的测算，不是下单指令；采购、付款与刊登都需要你单独确认。",
+    }
+
+
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")

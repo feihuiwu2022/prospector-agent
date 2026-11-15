@@ -577,6 +577,30 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderScalePlan(candidate) {
+  const plan = candidate.scalePlan || {};
+  if (!plan.complete) {
+    return `<section class="panel"><div class="panel-head"><h3>扩量建议</h3><small>小测达标后才有测算</small></div><div class="inline-alert">${esc(plan.reason || "小测尚未达标，不生成扩量方案。")}</div></section>`;
+  }
+  const money = (value) => (value == null ? "—" : `${Number(value).toLocaleString("zh-CN")} ${plan.currency || ""}`);
+  const rows = (plan.tiers || []).map((tier) => `<tr>
+    <td><b>${esc(tier.label)}</b><small>日均 ${tier.dailyUnits} 件</small></td>
+    <td>${tier.salesUnits} 件${tier.safetyUnits ? `<small>+ 安全库存 ${tier.safetyUnits} 件</small>` : ""}</td>
+    <td>${tier.totalUnits} 件</td>
+    <td>${money(tier.cashUsed)}</td>
+    <td>${tier.withinBudget === null ? "—" : tier.withinBudget ? `<span class="status-pill done">在预算内</span>` : `<span class="status-pill wait">超预算</span>`}</td>
+  </tr>`).join("");
+  const risks = (plan.risks || []).map((item) => `<li>${esc(item)}</li>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>扩量建议</h3><small>按小测实测日均销量测算</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>档位</th><th>铺货量</th><th>含安全库存</th><th>资金占用</th><th>预算对照</th></tr></thead><tbody>${rows}</tbody></table></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${risks}</ul><div class="bottom-note"><span>ⓘ</span><span>${esc(plan.note || "")}</span></div></section>`;
+}
+
+function renderTimeline(candidate) {
+  const timeline = candidate.timeline || [];
+  if (!timeline.length) return "";
+  const rows = timeline.map((item) => `<tr><td>${esc(item.at ? fmtDate(item.at) : "")}</td><td>${esc(item.title || item.stageId || "")}</td><td>${esc(item.from || "")} → ${esc(item.to || "")}</td><td>${esc(item.note || "")}</td></tr>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>阶段时间线</h3><small>每一步何时被谁推进的记录</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>时间</th><th>阶段</th><th>状态变化</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 function renderPilotPanel(candidate) {
   const pilot = candidate.pilot || {};
   const review = candidate.pilotReview || {};
@@ -676,6 +700,8 @@ function renderOverview(candidate) {
         ${candidate.priceScenarios?.length ? renderCandidateScenarios(candidate) : ""}
         ${renderSellerComparison(candidate)}
         ${renderPilotPanel(candidate)}
+        ${renderScalePlan(candidate)}
+        ${renderTimeline(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}

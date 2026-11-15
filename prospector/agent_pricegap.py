@@ -814,7 +814,9 @@ def advance_candidate_workflow(candidate: dict, thresholds: dict | None = None) 
     open_items = [item for item in checklist if item.get("id") != "price_evidence" and not item.get("done")]
     profit = calculate_profit(candidate.get("assumptions", {}))
     pilot = evaluate_pilot(candidate.get("pilot") or {}, thresholds)
+    timeline = candidate.get("timeline") or []
     for stage in stages:
+        before = stage.get("status")
         if stage.get("id") == "sourcing":
             if checklist and not open_items:
                 stage["status"] = "completed"
@@ -843,7 +845,17 @@ def advance_candidate_workflow(candidate: dict, thresholds: dict | None = None) 
             else:
                 stage["status"] = "blocked"
                 stage["note"] = "等待小测达标后再谈扩量；当前不生成备货建议。"
+        if stage.get("status") != before:
+            timeline.append({
+                "stageId": stage.get("id"),
+                "title": stage.get("title"),
+                "from": before,
+                "to": stage.get("status"),
+                "note": stage.get("note", ""),
+                "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            })
     candidate["workflowStages"] = stages
+    candidate["timeline"] = timeline[-60:]
     return candidate
 
 

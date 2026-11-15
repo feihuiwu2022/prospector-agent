@@ -31,6 +31,7 @@ from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
+    build_scale_plan,
     evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
@@ -94,6 +95,7 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["batchPlan"] = calculate_batch_plan(result.get("assumptions", {}), result["profit"])
     result["pilot"] = result.get("pilot") or {}
     result["pilotReview"] = evaluate_pilot(result["pilot"], profile.get("pilotThresholds"))
+    result["scalePlan"] = build_scale_plan(result, result["pilotReview"], profile, result["batchPlan"])
     result["resourceFit"] = resource_fit(result, profile)
     return result
 

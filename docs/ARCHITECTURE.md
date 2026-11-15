@@ -114,6 +114,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 - `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（`roles` 可多选：需求与内容侧 / 销售市场侧 / 货源侧）、销售市场（`sales_market`）、供给市场（`supply_market`）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录、经营画像和候选证据归类都读这张表；新增平台是改数据而不是改多处代码。目标市场（`MARKETS`：日本 / 中国 / 海外）决定销售平台清单，采购来源国决定货源平台清单。
 - `prospector/strategies.py`：策略与六阶段目录。
 - `calculate_batch_plan` 用首批数量与现金回本周期算资金占用与每日销量要求，不预测销量速度。
+- `build_scale_plan` 在小测达标后按实测日均销量给出 30/45/60 天备货量、安全库存与资金占用，并与预算对照；`advance_candidate_workflow` 同时把阶段状态变化写入候选的 `timeline`。
 - `evaluate_pilot` 用经营者录入的真实订单与投放数据，对照画像里的门槛（最少订单量、最高退款率、最低净利率）给出结论与建议；缺数据即「待补数据」，并据此推进六步流程的小测与扩量阶段。
 - 利润模型有两种：`calculate_profit`（统一模型，售价与采购价各自带币种，跨币种时额外要求汇率、头程与关税）与旧的日元专用模型（`cross_border_jpy`，兼容早期保存的候选）。两者都缺输入即返回“待核验”，不用默认值补齐。
 - `prospector/agent_discovery.py`：查询计划、候选生成、市场/货源复查、证据绑定；`_rejected_constraints` 把经营者写下的淘汰原因整理成“避免重复”的提示，只有在经营画像显式开启时才传入。

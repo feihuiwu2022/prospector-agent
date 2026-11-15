@@ -407,6 +407,55 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(stages["pilot"]["status"], "completed")
         self.assertEqual(stages["scale"]["status"], "pending")
 
+    def test_scale_plan_needs_a_passing_pilot(self) -> None:
+        from prospector.domain import build_scale_plan
+
+        blocked = build_scale_plan({}, {"complete": True, "verdict": "质量不达标"}, {"budgetCny": 100000}, {})
+        self.assertFalse(blocked["complete"])
+        self.assertEqual(blocked["tiers"], [])
+
+        candidate = {
+            "assumptions": {"purchasePrice": 1899, "sellingCurrency": "CNY"},
+            "profit": {"purchasePriceInSellingCurrency": 1899, "currency": "CNY"},
+        }
+        pilot = {
+            "complete": True,
+            "verdict": "达标",
+            "metrics": {"windowDays": 14, "orders": 40, "refundRate": 0.03},
+        }
+        plan = build_scale_plan(candidate, pilot, {"budgetCny": 100000}, {})
+        self.assertTrue(plan["complete"])
+        self.assertAlmostEqual(plan["dailyUnits"], round(40 / 14, 2), places=2)
+        labels = [tier["label"] for tier in plan["tiers"]]
+        self.assertEqual(labels, ["备货 30 天", "备货 45 天", "备货 60 天"])
+        biggest = plan["tiers"][-1]
+        # 60 days of cover plus 3% safety stock.
+        self.assertEqual(biggest["safetyUnits"], round(biggest["salesUnits"] * 0.03))
+        self.assertEqual(biggest["totalUnits"], biggest["salesUnits"] + biggest["safetyUnits"])
+        self.assertFalse(biggest["withinBudget"])
+        self.assertTrue(any("预算" in risk for risk in plan["risks"]))
+
+    def test_timeline_records_stage_changes(self) -> None:
+        from prospector.agent_pricegap import advance_candidate_workflow
+
+        candidate = {
+            "assumptions": {},
+            "purchaseChecklist": [],
+            "pilot": {
+                "windowDays": 14, "spend": 3000, "clicks": 3000, "orders": 40,
+                "refunds": 1, "revenue": 12000, "netProfit": 2000,
+            },
+            "workflowStages": [
+                {"id": "pilot", "number": 5, "title": "小批量测试", "status": "partial", "note": ""},
+            ],
+        }
+        advance_candidate_workflow(candidate, {"minOrders": 30, "maxRefundRate": 0.05, "minNetMargin": 0.1})
+        self.assertTrue(candidate["timeline"])
+        entry = candidate["timeline"][-1]
+        self.assertEqual(entry["stageId"], "pilot")
+        self.assertEqual(entry["to"], "completed")
+        self.assertTrue(entry["at"])
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 
