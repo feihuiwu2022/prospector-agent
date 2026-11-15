@@ -577,6 +577,25 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderSellerComparison(candidate) {
+  const pairing = candidate.priceGap || {};
+  if (!pairing.product) return "";
+  const observations = (state.priceObservations || []).filter((item) => item.product === pairing.product && item.config === pairing.sourceVariant);
+  if (!observations.length) return "";
+  const groups = new Map();
+  for (const item of observations) {
+    const key = `${item.platform}|${item.url}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const rows = [...groups.entries()].map(([, items]) => {
+    const sorted = [...items].sort((a, b) => String(b.observedAt).localeCompare(String(a.observedAt)));
+    const latest = sorted[0];
+    return `<tr><td><b>${esc(latest.platform || "未知平台")}</b><small>${esc((latest.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1"))}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${sorted.length} 次</td><td>${latest.url ? `<a href="${esc(latest.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td></tr>`;
+  }).sort((a, b) => a.localeCompare(b)).join("");
+  return `<section class="panel"><div class="panel-head"><h3>采购比价表</h3><small>同一商品与配置在各个页面见过的报价</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 店铺</th><th>最近可见报价</th><th>观察日期</th><th>次数</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>这些是页面报价记录，不等于可下单价；起订量、交期与发票仍需向卖家确认。</span></div></section>`;
+}
+
 function renderCandidateScenarios(candidate) {
   const rows = candidate.priceScenarios.map((scenario) => `<tr><td>${esc(scenario.label)}</td><td>${Number(scenario.purchasePrice).toLocaleString("zh-CN")}</td><td>${Number(scenario.grossGap).toLocaleString("zh-CN")}</td><td>${scenario.contributionProfit == null ? `<span class="status-pill wait">待补费用</span>` : `${Number(scenario.contributionProfit).toLocaleString("zh-CN")}`}</td><td>${esc(scenario.note || "")}</td></tr>`).join("");
   return `<section class="panel"><div class="panel-head"><h3>三档采购价基准</h3><small>同一配置，不同拿货价下的单件贡献利润</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>采购价基准</th><th>采购价</th><th>毛差价</th><th>贡献利润</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
@@ -631,6 +650,7 @@ function renderOverview(candidate) {
         <section class="panel"><div class="panel-head"><div><h3>Agent 选品判断</h3><small>${esc(candidate.strategyTitle || "指定商品研究")}${candidate.agentDiscovery?.confidence ? ` · 信号置信度 ${esc(candidate.agentDiscovery.confidence)}` : ""}</small></div><span class="status-pill">${statusLabel(candidate.status)}</span></div><div class="hypothesis-box">${esc(statusNote)}</div>${research ? `<div class="agent-final-review"><b>Agent 初筛：${({ keep: "进入人工审核", hold: "补证后审核", reject: "暂缓" })[research.recommendation] || "待审核"}</b><p>${esc(research.recommendationReason)}</p></div>` : ""}<div style="display:flex;gap:7px;margin-top:11px"><button class="button-secondary" data-action="tab" data-tab="evidence">查看来源证据</button><button class="button-quiet" data-action="tab" data-tab="tasks">查看 Agent 任务 →</button></div></section>
         ${candidate.priceGap ? renderPriceGapContext(candidate) : ""}
         ${candidate.priceScenarios?.length ? renderCandidateScenarios(candidate) : ""}
+        ${renderSellerComparison(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
@@ -724,10 +744,12 @@ function renderProfit(candidate) {
   const money = (value) => (result.currency === "CNY" ? `¥${Number(value).toLocaleString("zh-CN")}` : `¥${fmtYen(value)}`);
   return `<div class="detail-grid"><div><section class="panel"><div class="panel-head"><h3>单件利润假设</h3><small>同币种差价与跨境差价共用这一套字段</small></div><form id="profit-form" class="form-grid">
     ${unifiedProfitFields.map(input).join("")}
+    <div class="field"><label for="pf-fxSource">汇率来源（页面或日期）</label><input id="pf-fxSource" name="fxSource" type="text" value="${esc(values.fxSource || "")}" placeholder="例如：银行页面 2026-11-15" /></div>
+    <div class="field"><label for="pf-costSource">费用来源（平台规则页或你的记录）</label><input id="pf-costSource" name="costSource" type="text" value="${esc(values.costSource || "")}" placeholder="例如：京东商家后台费率截图" /></div>
     <p class="form-help">两端币种相同（同市场平台间差价）时不用填汇率、头程与关税；币种不同时这三项必须填。佣金和退货预留按百分比录入；缺任何必要输入都只显示“待核验”，系统不会用 0 代替。</p>
     <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存并计算</button></div></div>
   </form></section></div><aside>
-    <section class="panel"><div class="panel-head"><h3>利润情景</h3><small>${result.currency || fallbackCurrency} / 单件</small></div>${result.complete ? `<div class="profit-result"><div class="profit-metric"><span>贡献利润</span><b class="${result.contributionProfit < 0 ? "negative" : ""}">${money(result.contributionProfit)}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${result.contributionMargin < 0 ? "negative" : ""}">${(result.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>${money(result.breakEvenAdCost)}</b></div></div><div class="profit-costs">${Object.entries(result.costs).map(([key, value]) => `<div class="cost-row"><span>${esc(key)}</span><b>${money(value)}</b></div>`).join("")}</div>` : `<div class="inline-alert">补齐必要输入后展示计算结果；${result.missingFields?.length ? `当前缺：${result.missingFields.join("、")}。` : "关税和其他成本请核实或明确填入。"}</div>`}</section>
+    <section class="panel"><div class="panel-head"><h3>利润情景</h3><small>${result.currency || fallbackCurrency} / 单件</small></div>${values.fxSource || values.costSource ? `<div class="confidence-line"><span>汇率来源</span><span>${esc(values.fxSource || "未记录")}</span></div><div class="confidence-line"><span>费用来源</span><span>${esc(values.costSource || "未记录")}</span></div>` : `<div class="confidence-line"><span>汇率与费用来源</span><span>未记录</span></div>`}${result.complete ? `<div class="profit-result"><div class="profit-metric"><span>贡献利润</span><b class="${result.contributionProfit < 0 ? "negative" : ""}">${money(result.contributionProfit)}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${result.contributionMargin < 0 ? "negative" : ""}">${(result.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>${money(result.breakEvenAdCost)}</b></div></div><div class="profit-costs">${Object.entries(result.costs).map(([key, value]) => `<div class="cost-row"><span>${esc(key)}</span><b>${money(value)}</b></div>`).join("")}</div>` : `<div class="inline-alert">补齐必要输入后展示计算结果；${result.missingFields?.length ? `当前缺：${result.missingFields.join("、")}。` : "关税和其他成本请核实或明确填入。"}</div>`}</section>
     ${renderBatchPlan(candidate)}
     <section class="panel"><div class="panel-head"><h3>计算公式</h3></div><p style="font-size:8px;line-height:1.7;color:#7f8981;margin:0">售价 − 采购成本（跨币种时按手动汇率换算）− 头程 − 关税及进口税费 − 平台佣金 − 广告 − 履约与运费 − 退货预留 − 其他成本。</p><p style="font-size:8px;line-height:1.7;color:#9aa39b;margin:8px 0 0">单件贡献利润情景；未录入的固定费用、汇兑波动和税务处理仍需人工复核。</p></section>
   </aside></div>`;
@@ -755,7 +777,17 @@ function reportMarkdown(candidate) {
   const evidenceDimensions = new Set(candidate.evidence.map((item) => item.dimension));
   const gaps = Object.entries(state.evidenceDimensionLabels).filter(([key]) => !evidenceDimensions.has(key)).map(([key, label]) => `- ${label}：暂无来源，保持待验证`);
   const missingScores = candidate.scoreStatus?.missingScores || Object.keys(state.scoreLabels);
-  const profit = candidate.profit?.complete ? `单件贡献利润：¥${fmtYen(candidate.profit.contributionProfit)} JPY；贡献利润率：${(candidate.profit.contributionMargin * 100).toFixed(1)}%。` : "利润模型尚未填完。";
+  const profitLines = [];
+  if (candidate.profit?.complete) {
+    profitLines.push(`单件贡献利润：${Number(candidate.profit.contributionProfit).toLocaleString("zh-CN")} ${candidate.profit.currency || ""}；贡献利润率：${(candidate.profit.contributionMargin * 100).toFixed(1)}%。`);
+  } else {
+    profitLines.push("利润模型尚未填完。");
+  }
+  if (candidate.profit?.missingFields?.length) profitLines.push(`仍缺：${candidate.profit.missingFields.join("、")}。`);
+  if (candidate.assumptions?.fxSource) profitLines.push(`汇率来源：${candidate.assumptions.fxSource}。`);
+  if (candidate.assumptions?.costSource) profitLines.push(`费用来源：${candidate.assumptions.costSource}。`);
+  if (candidate.batchPlan?.complete) profitLines.push(`首批 ${candidate.batchPlan.batchQty} 件约占用 ${Number(candidate.batchPlan.cashUsed).toLocaleString("zh-CN")} ${candidate.batchPlan.currency || ""}，需每日售出 ${candidate.batchPlan.unitsPerDay} 件才能在 ${candidate.batchPlan.cashCycleDays} 天回本。`);
+  const profit = profitLines.join("\n");
   const tasks = candidate.tasks.map((task) => `- ${task.title}：${taskStatusLabel(task.status)}${task.result?.text ? `\n\n${task.result.text}` : ""}`).join("\n");
   const workflow = (candidate.workflowStages || []).map((stage) => `- ${stage.number}. ${stage.title}：${stage.status}。${stage.note || ""}`).join("\n");
   const marketName = candidate.market || "日本";
@@ -1203,6 +1235,7 @@ document.addEventListener("submit", async (event) => {
         const raw = String(data.get(key) || "").trim();
         if (raw === "") continue;
         if (currencyProfitFields.has(key)) assumptions[key] = raw.toUpperCase();
+        else if (key.endsWith("Source")) assumptions[key] = raw;
         else assumptions[key] = percentProfitFields.has(key) ? Number(raw) / 100 : Number(raw);
       }
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ assumptions }) });

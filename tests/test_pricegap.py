@@ -339,6 +339,24 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertIn("折叠晾衣架", constraints[0])
         self.assertIn("同质化严重", constraints[0])
 
+    def test_budget_check_uses_the_first_batch(self) -> None:
+        from prospector.domain import resource_fit
+
+        candidate = {
+            "assumptions": {
+                "purchasePriceCny": 1899,
+                "purchasePrice": 1899,
+                "batchQty": 100,
+            }
+        }
+        profile = {"budgetCny": 100000}
+        note = resource_fit(candidate, profile)
+        self.assertIn("首批", note)
+        self.assertIn("超过可投入预算", note)
+
+        comfortable = resource_fit({**candidate, "assumptions": {**candidate["assumptions"], "batchQty": 10}}, profile)
+        self.assertIn("预算可覆盖首批", comfortable)
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

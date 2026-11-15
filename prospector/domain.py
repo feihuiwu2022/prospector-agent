@@ -333,7 +333,8 @@ def _rate(value) -> float:
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")
-    purchase = candidate.get("assumptions", {}).get("purchasePriceCny")
+    assumptions = candidate.get("assumptions", {})
+    purchase = assumptions.get("purchasePriceCny")
     if budget in (None, "") or purchase in (None, ""):
         return "资料不足，无法匹配资源配置"
     try:
@@ -343,4 +344,20 @@ def resource_fit(candidate: dict, profile: dict) -> str:
         return "资料不足，无法匹配资源配置"
     if float(purchase) > float(budget):
         return "单件采购价已超过示例预算，请复核"
-    return "预算初步可覆盖单件采购；MOQ、头程和周转仍待核实"
+
+    # A first batch needs cash, not just one unit.
+    batch_qty = assumptions.get("batchQty")
+    purchase_in_selling = assumptions.get("purchasePrice")
+    if batch_qty in (None, "") or purchase_in_selling in (None, ""):
+        return "预算初步可覆盖单件采购；填入首批数量后可核对资金占用，MOQ、头程和周转仍待核实"
+    try:
+        quantity = float(batch_qty)
+        unit_price = float(purchase_in_selling)
+    except (TypeError, ValueError):
+        return "预算初步可覆盖单件采购；填入首批数量后可核对资金占用，MOQ、头程和周转仍待核实"
+    if quantity <= 0 or unit_price < 0:
+        return "预算初步可覆盖单件采购；填入首批数量后可核对资金占用，MOQ、头程和周转仍待核实"
+    cash_needed = quantity * unit_price
+    if cash_needed > float(budget):
+        return f"首批 {quantity:g} 件约需 {cash_needed:,.0f}（采购币种），已超过可投入预算 {float(budget):,.0f}，请下调批量或调整预算"
+    return f"预算可覆盖首批 {quantity:g} 件约 {cash_needed:,.0f}（采购币种）；MOQ、头程和周转仍待核实"

@@ -1045,6 +1045,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "purchaseChecklist": build_purchase_checklist(product, spec),
             "priceScenarios": (scenarios_by_key.get((spec["config"], spec.get("targetPlatformId", ""))) or {}).get("scenarios", []),
             "priceGap": {
+                "product": product,
                 "sourcePlatform": spec["sourcePlatform"],
                 "sourceTitle": spec["sourceTitle"] or f"{product} {spec['config']}",
                 "sourcePrice": spec["sourcePrice"],
