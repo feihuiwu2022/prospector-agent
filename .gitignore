@@ -4,3 +4,6 @@ data/prospector.json
 data/prospector.tmp
 .codegraph/
 .DS_Store
+.env
+.venv/
+data/browser-profile/

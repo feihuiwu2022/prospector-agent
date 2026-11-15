@@ -57,6 +57,19 @@ function importPlatformOptions(selected) {
   return items.map((item) => `<option value="${esc(item.id)}" ${item.id === selected ? "selected" : ""}>${esc(item.platform)}</option>`).join("");
 }
 
+const BROWSER_PLATFORM_NAMES = {
+  taobao: "淘宝 / 天猫",
+  jd: "京东",
+  douyin: "抖音（抖音商城）",
+  "1688": "1688",
+};
+
+function browserPlatformList() {
+  const known = ((state.browserStatus || {}).status || {}).platforms;
+  if (Array.isArray(known) && known.length) return known;
+  return Object.entries(BROWSER_PLATFORM_NAMES).map(([id, name]) => ({ id, name, hasCredentials: false }));
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -140,6 +153,7 @@ async function refresh() {
   try {
     const data = await api("/api/bootstrap");
     Object.assign(state, data);
+    state.browserStatus = await api("/api/browser/status").catch(() => null);
     if (!state.currentConversationId && !state.showNewConversation && state.conversations?.length) {
       state.currentConversationId = state.conversations[0].id;
       state.chatMode = state.conversations[0].mode || state.chatMode;
@@ -153,6 +167,30 @@ async function refresh() {
   } catch (error) {
     notice.textContent = `无法读取本地研究空间：${error.message}。请确认本地服务仍在运行，然后刷新页面。`;
     notice.classList.add("show");
+  }
+}
+
+async function watchBrowserLogin(platform) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 3000));
+    let status = null;
+    try {
+      status = await api("/api/browser/status");
+    } catch (error) {
+      continue;
+    }
+    const login = status.login || {};
+    if (login.platform !== platform) continue;
+    if (login.status === "logged_in") {
+      toast("登录成功，会话已保存，可以直接采集。");
+      await refresh();
+      return;
+    }
+    if (login.status === "not_logged_in" || login.status === "failed") {
+      toast(login.message || "没有等到登录完成，请重试。", true);
+      await refresh();
+      return;
+    }
   }
 }
 
@@ -1356,6 +1394,22 @@ function renderDiscovery() {
     }[role];
     return `<section class="panel"><div class="panel-head"><div><h3>${title}</h3><small>${hint}</small></div><span class="connector-count">${items.length} 个平台</span></div><div class="connector-grid">${cards}</div></section>`;
   }).join("");
+  const browserStatus = (state.browserStatus || {}).status || {};
+  const browserPlatforms = browserPlatformList();
+  const browserStatusLine = browserStatus.ready
+    ? `<b>已就绪</b> · 浏览器 profile：<code>${esc(browserStatus.profile || "")}</code> · 账号密码：<code>${esc(browserStatus.envExists ? browserStatus.envFile : "未配置 .env（扫码登录即可）")}</code>`
+    : `<b>未就绪</b> · 先在项目里准备采集环境：<code>python3 -m venv .venv && .venv/bin/pip install DrissionPage</code>`;
+  const browserLoginButtons = [
+    `<button class="button-secondary" data-action="browser-login" data-platform="${browserPlatforms.map((row) => row.id).join(",")}">全部登录</button>`,
+  ].concat(browserPlatforms.map((item) => {
+    const loginState = ((state.browserStatus || {}).login || {});
+    const done = (loginState.results || []).some((row) => row.platformId === item.id && row.loggedIn);
+    const running = loginState.status === "running" && (loginState.platforms || []).includes(item.id);
+    const label = done ? "已登录 · " : running ? "登录中… " : "登录 ";
+    return `<button class="button-secondary" data-action="browser-login" data-platform="${esc(item.id)}" ${(running ? "disabled" : "")}>${esc(label + item.name)}</button>`;
+  })).join("");
+  const browserCandidates = (state.candidates || []).map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
+  const browserPlatformCheckboxes = browserPlatforms.map((item) => `<label><input type="checkbox" name="platforms" value="${esc(item.id)}" checked /> ${esc(item.name)}${(item.hasCredentials ? "（.env 有账号）" : "")}</label>`).join("");
   const importCandidates = (state.candidates || [])
     .map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`)
     .join("");
@@ -1378,14 +1432,42 @@ function renderDiscovery() {
     const strategy = state.discoveryStrategies.find((item) => item.id === run.strategyId);
     const modeTitle = ({ automatic_selection: "自动选品", manual_selection: "手动选品", competitor_analysis: "手动竞品分析" })[run.mode];
     const status = run.status === "running" ? `运行中 · ${Number(run.progress || 0)}%` : run.status === "needs_human_review" ? "待审核" : run.status === "no_candidates" ? "无候选" : run.status === "failed" ? "失败" : run.status === "needs_product_match_review" ? "待核对同款" : run.status === "needs_cost_input" ? "待补费用" : run.status === "needs_manual_validation" ? "待人工复核" : "已完成";
+    const reportBlock = run.report ? renderPriceGapReport(run) : "";
     const matchBlock = run.trigger === "price_gap_pair" && run.matching ? `<div class="report-list"><b>同款校验：${esc(run.matching.status)}</b><ul>${(run.matching.reasons || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>${run.estimate ? `<p>按你填的汇率与费用估算：单件贡献利润 ${Number(run.estimate.estimatedContribution).toLocaleString("zh-CN")} ${esc(run.estimate.currency || "")}（${(Number(run.estimate.estimatedContributionMargin || 0) * 100).toFixed(1)}%）。</p>` : `<p>${esc(run.estimateError || "费用未填齐，未计算贡献利润。")}</p>`}</div>` : "";
-    return `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(strategy ? `策略 ${strategy.code} · ${strategy.title}` : modeTitle || (run.trigger === "price_gap_pair" ? "同款价差研究" : "发现运行"))}</span><h3>${esc(run.title || "Agent 研究运行")}</h3></div><time>${fmtDate(run.createdAt)}</time></div><p class="run-signal-note">${esc(run.message || run.summary || "等待任务开始")}</p><div class="run-signal-metrics"><span>${status}</span><span>${Number(run.candidateCount || 0)} 个候选</span><span>${Number(run.sourceCount || 0)} 条搜索结果</span></div>${matchBlock}</article>`;
+    return `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(strategy ? `策略 ${strategy.code} · ${strategy.title}` : modeTitle || (run.trigger === "price_gap_pair" ? "同款价差研究" : "发现运行"))}</span><h3>${esc(run.title || "Agent 研究运行")}</h3></div><time>${fmtDate(run.createdAt)}</time></div><p class="run-signal-note">${esc(run.message || run.summary || "等待任务开始")}</p><div class="run-signal-metrics"><span>${status}</span><span>${Number(run.candidateCount || 0)} 个候选</span><span>${Number(run.sourceCount || 0)} 条搜索结果</span></div>${matchBlock}${reportBlock}</article>`;
   }).join("");
   content.innerHTML = `
     <div class="page-kicker">Sources & agent runs</div>
     <div class="page-heading"><div><h1>Agent 搜索与数据源</h1><p>Agent 自动搜索公开网页；官方平台 API 在获得对应权限后再接入。</p></div><button class="button-quiet" data-action="home">返回 Agent 选品</button></div>
     <section class="agent-intro"><div><span class="agent-live-dot ${webSearch.configured ? "" : "offline"}"></span><b>${webSearch.configured ? "MiniMax Web Search 已连接" : "MiniMax Web Search 未配置"}</b><p>${esc(webSearch.message || "检查本机 MiniMax 配置。")}</p></div><span class="agent-model">${esc(state.llmProvider?.model || "MiniMax")}</span></section>
     <section class="source-boundary-grid"><article><b>现在可用</b><p>Agent 可按策略搜索 Google Trends、TikTok、抖音、快手、Amazon.co.jp、乐天、Yahoo! Shopping、1688、淘宝、京东、拼多多等公开页面线索，并附来源 URL 与采集时间。</p></article><article><b>仍需官方授权</b><p>趋势序列、平台热销榜、商品详情/实时价格、账号数据、直播与投放数据、MOQ 与阶梯报价等，需要各平台官方应用与对应接口权限。</p></article></section>
+    <section class="panel browser-panel">
+      <div class="panel-head">
+        <div><h3>本机浏览器采集</h3><small>用你自己的登录态打开淘宝 / 京东 / 抖音 / 1688 的搜索页，把页面上真的价格读下来</small></div>
+        <span class="connector-count">本机采集</span>
+      </div>
+      <div class="browser-status" id="browser-status">
+        ${browserStatusLine}
+      </div>
+      <div class="browser-logins">
+        ${browserLoginButtons}
+      </div>
+      <form id="browser-collect-form">
+        <div class="form-grid">
+          <div class="field full"><label for="browser-product">商品名称 / 型号</label><input id="browser-product" name="product" placeholder="例如：OPPO K13s" /></div>
+          <div class="field"><label for="browser-candidate">写入到候选（可选）</label><select id="browser-candidate" name="candidateId"><option value="">— 不写候选 —</option>${browserCandidates}</select></div>
+          <div class="field"><label for="browser-market">目标市场</label><select id="browser-market" name="market">${marketOptions(state.profile?.market || "中国")}</select></div>
+          <div class="field full"><label>采集平台</label>
+            <div class="import-targets">
+              ${browserPlatformCheckboxes}
+            </div>
+          </div>
+        </div>
+        <div class="form-actions" style="margin-top:12px"><button class="button-primary" type="submit">开始采集</button></div>
+      </form>
+      <div id="browser-result"></div>
+      <div class="bottom-note"><span>ⓘ</span><span>采集用你本机 Chrome 的独立 profile：先点「登录」扫码一次，之后每次采集都复用这个会话。系统不代你登录、不绕过验证码、不下单，采到的就是页面上显示的价格。</span></div>
+    </section>
     <section class="panel import-panel">
       <div class="panel-head">
         <div><h3>授权文件导入</h3><small>把平台后台导出的报价 CSV/Excel 当硬数据用：不需要开发者资质，文件只在本机解析</small></div>
@@ -1583,6 +1665,13 @@ document.addEventListener("click", async (event) => {
     if (action === "discovery") { state.view = "discovery"; state.selectedId = null; render(); return; }
     if (action === "board") { state.view = "board"; state.selectedId = null; render(); return; }
     if (action === "metrics") { state.view = "metrics"; state.selectedId = null; render(); return; }
+    if (action === "browser-login") {
+      const platform = button.dataset.platform;
+      toast("正在打开登录窗口，请在 Chrome 里扫码或输入账号密码。");
+      await api("/api/browser/login", { method: "POST", body: JSON.stringify({ platform, waitSeconds: 240 }) });
+      watchBrowserLogin(platform);
+      return;
+    }
     if (action === "delete-import") {
       const importId = button.dataset.id;
       if (!window.confirm("撤销这次导入？它写入的证据、报价和线索会一并删除。")) return;
@@ -1998,6 +2087,34 @@ document.addEventListener("submit", async (event) => {
       await refresh();
       toast("Agent 已接收任务，正在搜索并整理结果。");
       watchAgentDiscovery(response.run.id);
+      return;
+    }
+    if (form.id === "browser-collect-form") {
+      const product = String(data.get("product") || "").trim();
+      if (!product) { toast("先填商品名称或型号。", true); return; }
+      const platforms = data.getAll("platforms").map(String);
+      if (!platforms.length) { toast("至少选一个平台。", true); return; }
+      toast("正在用本机浏览器采集，请稍候…");
+      const response = await api("/api/browser/collect", {
+        method: "POST",
+        body: JSON.stringify({
+          product,
+          platforms,
+          candidateId: data.get("candidateId") || "",
+          market: data.get("market"),
+          limit: 20,
+        }),
+      });
+      await refresh();
+      const target = document.querySelector("#browser-result");
+      if (target) {
+        target.innerHTML = renderPriceGapReport({
+          id: response.run.id,
+          report: response.report,
+          sourceCount: response.run.sourceCount,
+        });
+      }
+      toast("采集完成：读到 " + response.rows.length + " 条可见报价。");
       return;
     }
     if (form.id === "import-form") {

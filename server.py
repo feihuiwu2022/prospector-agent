@@ -26,14 +26,18 @@ from prospector.agent_pricegap import (
     build_price_gap_candidates,
     compute_platform_profit,
     merge_purchase_checklist,
+    price_gap_report,
+    price_gap_rows,
     run_price_gap_scan,
     summarize_price_history,
 )
+from prospector.collectors.browser import BROWSER_PLATFORMS, collect_cli, status_cli
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import (
     MARKETS,
     PLATFORMS,
+    market_currency,
     default_platform_for_market,
     market_group_catalog,
     sales_channels,
@@ -80,6 +84,10 @@ CATEGORIES = ["家居收纳", "宠物用品", "园艺用品", "DIY 五金", "汽
 MODES = {"discovery", "active_research", "specified_product"}
 EVIDENCE_DIMENSIONS = set(EVIDENCE_DIMENSION_LABELS)
 SCORE_KEYS = set(SCORE_LABELS)
+
+# The browser collector runs in its own virtualenv; this keeps the state of
+# the last login attempt so the page can show what happened.
+BROWSER_STATE = {"login": {}, "lastCollect": None}
 
 
 def utc_now() -> str:
@@ -328,6 +336,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metrics":
             self.send_json(200, self.build_metrics(data))
             return
+        if path == "/api/browser/status":
+            self.send_json(200, {
+                "status": status_cli(),
+                "login": BROWSER_STATE["login"],
+                "lastCollect": BROWSER_STATE["lastCollect"],
+            })
+            return
         if path == "/api/imports":
             self.send_json(200, {
                 "imports": sorted(data.get("imports", []), key=lambda item: item.get("importedAt", ""), reverse=True),
@@ -375,6 +390,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/imports":
             self.create_import(body)
+            return
+        if path == "/api/browser/login":
+            self.start_browser_login(body)
+            return
+        if path == "/api/browser/collect":
+            self.collect_browser_prices(body)
             return
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
@@ -1507,6 +1528,165 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(201, {
             "import": result,
             "candidate": candidate_view(candidate, STORE.read().get("profile", DEFAULT_PROFILE)) if candidate else None,
+        })
+
+    def start_browser_login(self, body: dict) -> None:
+        """Open the platform login page in the operator's own browser.
+
+        The window appears on the desktop; the operator scans the QR code or
+        completes the password form there.  Nothing is typed into the page by
+        the service unless credentials sit in the local .env.
+        """
+        wanted = [item.strip() for item in str(body.get("platform", "")).split(",") if item.strip()]
+        wanted = [item for item in wanted if item in BROWSER_PLATFORMS]
+        if not wanted:
+            raise ValueError("请选择要登录的平台。")
+        wait = int(body.get("waitSeconds") or 240)
+        BROWSER_STATE["login"] = {
+            "platforms": wanted,
+            "status": "running",
+            "results": [],
+            "startedAt": utc_now(),
+        }
+
+        def worker():
+            try:
+                result = collect_cli(["login", "--platform", ",".join(wanted), "--wait-login", str(wait)])
+            except Exception as exc:  # noqa: BLE001 - the page shows the reason
+                BROWSER_STATE["login"] = {
+                    "platforms": wanted,
+                    "status": "failed",
+                    "results": [],
+                    "message": str(exc),
+                    "finishedAt": utc_now(),
+                }
+                return
+            results = result.get("results", [])
+            done = [item.get("platformId") for item in results if item.get("loggedIn")]
+            BROWSER_STATE["login"] = {
+                "platforms": wanted,
+                "status": "logged_in" if done else "not_logged_in",
+                "results": results,
+                "loggedInPlatforms": done,
+                "message": (
+                    "登录成功（" + "、".join(done) + "），会话已保存在本机 profile。"
+                    if done
+                    else "没有等到登录完成，请重试或改用 .env 账号密码。"
+                ),
+                "finishedAt": utc_now(),
+            }
+
+        Thread(target=worker, daemon=True).start()
+        self.send_json(202, {"login": BROWSER_STATE["login"]})
+
+    def collect_browser_prices(self, body: dict) -> None:
+        """Collect the prices the operator's own browser session can see."""
+        product = str(body.get("product", "")).strip()[:160]
+        if not product:
+            raise ValueError("请填写要采集的商品名称或型号。")
+        market = str(body.get("market", "")).strip()[:80] or "中国"
+        raw_platforms = body.get("platforms")
+        platform_ids = [
+            str(item).strip()
+            for item in (raw_platforms if isinstance(raw_platforms, list) else [])
+            if str(item).strip() in BROWSER_PLATFORMS
+        ]
+        if not platform_ids:
+            raise ValueError("请选择至少一个要采集的平台。")
+        try:
+            limit = max(1, min(50, int(body.get("limit") or 20)))
+        except (TypeError, ValueError):
+            limit = 20
+        candidate_id = str(body.get("candidateId", "")).strip()[:64]
+
+        try:
+            result = collect_cli([
+                "collect",
+                "--product", product,
+                "--platforms", ",".join(platform_ids),
+                "--limit", str(limit),
+            ])
+        except Exception as exc:  # noqa: BLE001 - the page shows the reason
+            raise ValueError(f"采集失败：{exc}") from exc
+
+        rows = []
+        for entry in result.get("platforms", []):
+            platform = PLATFORMS.get(entry.get("platformId", ""))
+            if not platform:
+                continue
+            rows.extend(price_gap_rows(product, platform, entry.get("rows", []), market_currency(market)))
+        report = price_gap_report(
+            product,
+            market,
+            rows,
+            platform_ids,
+            source_note="价格来自登录后的本机浏览器页面，未打开后台数据接口。",
+        )
+        now = utc_now()
+
+        def save(data):
+            observations = data.setdefault("priceObservations", [])
+            for entry in result.get("platforms", []):
+                for raw in entry.get("rows", []):
+                    observations.append({
+                        "product": raw.get("title", product),
+                        "config": raw.get("snippet", "")[:120],
+                        "platformId": entry.get("platformId", ""),
+                        "platform": entry.get("platform", ""),
+                        "price": raw.get("price"),
+                        "currency": raw.get("currency", "CNY"),
+                        "url": raw.get("url", ""),
+                        "observedAt": raw.get("observedAt", now[:10]),
+                        "recordedAt": now,
+                        "secondHand": False,
+                        "source": "本机浏览器采集",
+                    })
+            candidate = find_candidate(data, candidate_id) if candidate_id else None
+            if candidate is not None:
+                for row in rows:
+                    candidate.setdefault("evidence", []).append({
+                        "id": str(uuid4()),
+                        "dimension": "sourcing",
+                        "title": f"{row['platform']} 页面报价 · {row['title']}"[:240],
+                        "sourceType": "本机浏览器采集",
+                        "url": row["url"] or f"browser://{row['platformId']}",
+                        "observedAt": row["observedAt"],
+                        "note": (
+                            f"登录后页面可见报价 {row['priceLow']} {row['currency']}；"
+                            f"配置 {row['configKey'] or '未识别'}；店铺 {row.get('seller') or '未识别'}。"
+                        )[:4000],
+                        "createdAt": now,
+                    })
+                candidate["updatedAt"] = now
+                refresh_task_statuses(candidate)
+            run = {
+                "id": str(uuid4()),
+                "trigger": "browser_price_scan",
+                "title": f"{product} · 本机浏览器采集",
+                "status": report["status"],
+                "message": report["summary"],
+                "report": report,
+                "candidateId": candidate_id,
+                "sourceCount": len(rows),
+                "platforms": result.get("platforms", []),
+                "createdAt": now,
+                "updatedAt": now,
+            }
+            data.setdefault("discoveryRuns", []).append(run)
+            return run
+
+        run = STORE.update(save)
+        BROWSER_STATE["lastCollect"] = {
+            "product": product,
+            "runId": run["id"],
+            "rows": len(rows),
+            "at": now,
+        }
+        self.send_json(200, {
+            "run": run,
+            "report": report,
+            "rows": rows,
+            "platforms": result.get("platforms", []),
         })
 
     def delete_import(self, import_id: str) -> None:

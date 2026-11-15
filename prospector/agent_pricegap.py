@@ -1137,3 +1137,136 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "updatedAt": _now_iso(),
         })
     return candidates
+
+
+def price_gap_rows(product: str, platform: dict, raw_rows: list[dict], currency: str) -> list[dict]:
+    """Turn rows collected in a browser session into the standard row shape.
+
+    The browser sees the real product title, so the model check and the
+    configuration read work on the same fields as the search-snippet path.
+    """
+    rows = []
+    for raw in raw_rows:
+        title = _as_text(raw.get("title"), 240)
+        snippet = _as_text(raw.get("snippet"), 1200)
+        text = f"{title} {snippet}"
+        if not _model_confirmed(product, text):
+            continue
+        try:
+            price = float(raw.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        config = _config(text)
+        rows.append({
+            "platformId": platform["id"],
+            "platform": platform["name"],
+            "title": title,
+            "url": _as_text(raw.get("url"), 1000),
+            "observedAt": _as_text(raw.get("observedAt"), 20) or date.today().isoformat(),
+            "snippet": snippet,
+            "priceLow": price,
+            "priceHigh": price,
+            "currency": currency,
+            "ramGb": config["ramGb"],
+            "storageGb": config["storageGb"],
+            "configSource": config["configSource"],
+            "configKey": _config_key(config["ramGb"], config["storageGb"]),
+            "color": _color(text),
+            "modelConfirmed": True,
+            "secondHand": bool(platform.get("second_hand", False)),
+            "seller": _as_text(raw.get("seller"), 120) or _seller_of(raw.get("url", "")),
+            "promoSignals": _promo_signals(text),
+            "sourceRef": _as_text(raw.get("sourceRef"), 40),
+            "searchQuery": _as_text(raw.get("searchQuery"), 240),
+            "collectedBy": _as_text(raw.get("source"), 40),
+        })
+    return rows
+
+
+def price_gap_report(
+    product: str,
+    market: str,
+    rows: list[dict],
+    platform_ids: list[str],
+    source_note: str = "",
+) -> dict:
+    """Build the same report as a search scan, from rows collected elsewhere.
+
+    Only the numbers change: the grouping, the configuration check and the
+    caveats are the ones the rest of the product already relies on.
+    """
+    currency = market_currency(market)
+    groups = _group_rows(rows)
+    comparable = [group for group in groups if group["comparable"]]
+
+    platform_summary = []
+    for platform_id in platform_ids:
+        platform = PLATFORMS.get(platform_id)
+        if not platform:
+            continue
+        platform_rows = [row for row in rows if row["platformId"] == platform_id]
+        if not platform_rows:
+            platform_summary.append({
+                "platform": platform["name"],
+                "platformId": platform_id,
+                "status": "no_visible_price",
+                "note": "这个平台没有读到带价格的商品卡片（可能需要登录或页面结构已改版）。",
+            })
+            continue
+        best = min(platform_rows, key=lambda item: item["priceLow"])
+        platform_summary.append({
+            "platform": platform["name"],
+            "platformId": platform_id,
+            "status": "found",
+            "secondHand": best["secondHand"],
+            "visiblePriceLow": best["priceLow"],
+            "visiblePriceHigh": best["priceHigh"],
+            "currency": best["currency"],
+            "config": best["configKey"] or "配置未识别",
+            "rowCount": len(platform_rows),
+            "note": source_note or "价格为登录后页面上的可见报价。",
+        })
+
+    gaps = [
+        "差价是页面上的挂牌价，未扣平台佣金、广告、履约与退货预留，不能当作利润。",
+        "同配置对比只覆盖页面里写明内存与存储的商品；配置未写明的已单独列出。",
+        "最终利润需在候选详情页填入采购价、汇率、头程、税费、佣金与广告后重算。",
+    ]
+    if not comparable:
+        gaps.insert(0, "没有找到两家以上平台的同配置可见价格，本轮不给差价结论。")
+
+    summary = (
+        f"在{market}的 {len(platform_ids)} 个平台采集了 {product}："
+        f"{len(comparable)} 组同配置可以对比，"
+        f"最大毛差价 {max((group['grossGap'] for group in comparable), default=0):.0f} {currency}（未扣费用）。"
+    )
+
+    return {
+        "status": "needs_manual_validation" if comparable else "no_comparable_rows",
+        "summary": summary,
+        "scope": f"{product} · {market} · {len(platform_ids)} 个平台",
+        "currency": currency,
+        "groups": groups,
+        "opportunities": _opportunities(groups, currency),
+        "platformSummary": platform_summary,
+        "crossBorder": None,
+        "gaps": gaps,
+        "evidence": [
+            {
+                "ref": row["sourceRef"],
+                "title": row["title"],
+                "url": row["url"],
+                "snippet": row["snippet"],
+                "platform": row["platform"],
+                "query": row["searchQuery"],
+            }
+            for group in groups
+            for row in group["rows"]
+        ],
+        "searchCount": 0,
+        "sourceCount": len(rows),
+        "collectedBy": source_note,
+        "generatedAt": _now_iso(),
+    }

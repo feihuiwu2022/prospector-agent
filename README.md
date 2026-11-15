@@ -62,6 +62,17 @@ GitHub Actions 在 push 与 PR 上运行三个任务：Python 3.11/3.12 冒烟�
 
 每一步都保留来源、状态与人工确认点；缺数据就停在原地，不用零值或推测填补。
 
+## 本机浏览器采集
+
+淘宝、京东、抖音商城、1688 的价格是 JavaScript 渲染的，而且多数平台对未登录访客只给登录墙或局部结果——所以只靠公开搜索摘要的比价会看到「页面都没打开」。等官方资质下来之前，有一条不需要任何 API 权限的路：用你自己的浏览器会话把这些页面读出来。
+
+- **采集器**：`prospector/collectors/browser.py`，基于开源项目 DrissionPage（GitHub: greatbay/DrissionPage），驱动本机 Google Chrome 的独立 profile 目录 `data/browser-profile/`。
+- **登录一次**：数据源页点「登录」会弹出 Chrome 窗口，扫码即可；会话存在 profile 里，之后每次采集都复用。也可以把账号密码写进本地 `.env`（见 `.env.example`，.env 不进版本库），采集时会自动填表，验证码/滑块仍需你本人在窗口里完成。
+- **采集**：填商品名（如 OPPO K13s）→ 选平台 → 采集。读到的就是登录后页面上显示的价格，带店铺与商品链接，写入价格观察、候选证据与同品比价报告。
+- **准备环境**：`python3 -m venv .venv && .venv/bin/pip install DrissionPage`（主服务仍是纯标准库，浏览器采集跑在 .venv 的子进程里）。
+
+边界：采集器不代你登录、不破解验证码、不伪装浏览器指纹、不下单不议价，只读取你本人账号已经能看到的页面内容；请按各平台规则与自己的账号权限使用，采集频率保持人工浏览的量级。
+
 ## 数据源边界
 
 MiniMax Web Search 通过官方 MCP 搜索公开页面并保留来源链接。它不等于 Google Trends 原始趋势 API、TikTok/抖音实时榜、Amazon 商品 API 或 1688 正式报价。Amazon、乐天、Yahoo、1688、淘宝、京东的具体商品数据需对应官方 API/商业授权或页面人工复核；系统不模拟登录或绕过访问控制。完整边界见[数据源与运行页](public/index.html)、[PRD](docs/PRD.md)和[架构文档](docs/ARCHITECTURE.md)。

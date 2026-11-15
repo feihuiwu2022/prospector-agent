@@ -713,3 +713,10 @@ a:hover { text-decoration: underline; }
 .import-targets { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .import-targets label { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); cursor: pointer; }
 .import-targets input { accent-color: var(--brand); }
+
+.browser-panel { margin-top: 12px; }
+.browser-status { padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-2); font-size: 11px; color: var(--ink-2); line-height: 1.7; }
+.browser-status code { font-size: 10.5px; color: var(--ink-3); word-break: break-all; }
+.browser-logins { display: flex; flex-wrap: wrap; gap: 8px; margin: 11px 0; }
+.browser-logins button { font-size: 11px; padding: 6px 11px; }
+.browser-panel #browser-result { margin-top: 12px; }

@@ -193,6 +193,17 @@ MiniMax 官方 Coding Plan 提供 Web Search MCP。Agent 发起公开网页搜�
 - 文件内容按 SHA-256 去重，重复导入返回 409，避免证据和报价被重复计数。
 - 导入记录保留来源文件、行数、写入去向与跳过原因；撤销时按 importId 回滚所有写入并还原假设。
 
+### 本机浏览器采集
+
+公开搜索摘要拿不到淘宝、京东、抖音商城、1688 的真实价格：这些页面的价格由 JavaScript 渲染，未登录访客还会被登录墙挡住。采集器因此走一条完全不同的链路——读操作者自己的浏览器会话。
+
+- 模块 `prospector/collectors/browser.py`：平台配置（搜索 URL、登录 URL、商品链接选择器、登录态 cookie）都在标准库代码里，DrissionPage 只在 .venv 子进程里导入。
+- 服务通过 `collect_cli()` 起子进程执行 `python -m prospector.collectors.browser`，stdout 只回 JSON，stderr 走日志；主服务保持标准库依赖不变。
+- 登录态保存在 `data/browser-profile/`（独立 profile，不与日常 Chrome 冲突）。登录由操作者本人完成：扫码，或把账号密码写进本地 .env 让采集器填表，验证码与滑块始终由人完成。
+- 采集结果先转成与搜索摘要同构的行（型号确认、容量配置、平台、店铺、链接），再走同一套分组与差价计算，因此比价结论的口径一致。
+- 落库位置：价格观察（货源线索库）、候选的供应链证据、一条 `browser_price_scan` 运行记录（带比价报告）。
+- 采集不写平台账号，不下单、不议价、不聊天；只读取账号本身已经可见的页面。
+
 ## 8. MiniMax 安全与请求生命周期
 
 1. 服务端从 `MINIMAX_API_KEY` 或 `~/.pi/agent/auth.json` 的 provider key 读取凭证；模型和 base URL 从 Pi Agent 配置读取，并验证为受支持的官方 HTTPS host。
