@@ -599,6 +599,18 @@ class ServerSmokeTest(unittest.TestCase):
         # Re-confirming replaces the earlier value instead of adding to it.
         self.assertEqual(payload["assumptions"]["otherCost"], 5.0)
 
+    def test_connectors_expose_an_authorization_checklist(self) -> None:
+        data = json.loads(_get(f"{self.base}/api/bootstrap")[2])
+        connectors = {item["platform"]: item for item in data["connectors"]}
+        guide = connectors["1688"]["authorizationGuide"]
+        self.assertTrue(guide["portal"].startswith("http"))
+        self.assertTrue(guide["requirements"])
+        self.assertTrue(guide["scopes"])
+        self.assertTrue(guide["fields"])
+        self.assertIn("MOQ", " ".join(guide["fields"]))
+        for connector in data["connectors"]:
+            self.assertTrue(connector["authorizationGuide"], f"{connector['platform']} 缺少授权准备清单")
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

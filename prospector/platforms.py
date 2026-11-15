@@ -257,6 +257,110 @@ PLATFORMS = {
 }
 
 
+# What it takes to turn a public search hint into an authorized data feed.
+# Each entry is the practical checklist for applying, not a promise of
+# access: scopes and eligibility change per platform.
+AUTHORIZATION_GUIDES = {
+    "1688": {
+        "portal": "https://aop.alibaba.com/",
+        "requirements": ["企业营业执照（需与采购/经营主体一致）", "开发者账号并完成企业认证"],
+        "scopes": ["商品搜索", "offer 详情", "阶梯价与起批量", "库存与交期", "买家授权后的订单"],
+        "fields": ["挂牌价与阶梯价", "起订量 MOQ", "供应商与工厂信息", "规格参数", "库存与发货地"],
+        "note": "未授权前只能看到公开页面摘要；MOQ、阶梯价与供应商能力必须来自授权接口或书面报价。",
+    },
+    "taobao": {
+        "portal": "https://open.taobao.com/",
+        "requirements": ["企业或个体工商户资质", "淘宝开放平台开发者账号"],
+        "scopes": ["商品搜索（应用类型受限）", "商品详情与 SKU", "店铺信息", "订单（需买家授权）"],
+        "fields": ["实时价格与促销", "SKU 规格", "店铺与销量口径", "评价主题（需授权接口）"],
+        "note": "官方文档明确商品搜索不是全站通用接口，授权后仍要按应用类型核对可调范围。",
+    },
+    "jd": {
+        "portal": "https://open.jd.com/",
+        "requirements": ["企业营业执照", "京东零售开放平台开发者账号"],
+        "scopes": ["商品信息", "库存与配送", "订单与售后（需商家授权）"],
+        "fields": ["实时售价", "库存与配送时效", "订单与退款", "促销与优惠券规则"],
+        "note": "自营、POP 等业务线的接口不同，不能假设为通用消费者商品搜索。",
+    },
+    "pdd": {
+        "portal": "https://open.pinduoduo.com/",
+        "requirements": ["企业主体资质", "开放平台开发者认证"],
+        "scopes": ["商品与 SKU", "订单", "营销与优惠券"],
+        "fields": ["零售价与活动价", "SKU 与规格", "订单与售后"],
+        "note": "公开页面多为营销页，零售低价不等于可复制的源头成本。",
+    },
+    "yiwugo": {
+        "portal": "https://open.yiwugo.com/",
+        "requirements": ["企业主体资质", "义乌购 / 中国商品网开放平台账号"],
+        "scopes": ["商品与批发价", "档位与起批量"],
+        "fields": ["批发档位价", "起订量", "档位说明"],
+        "note": "批发档位价可用于成本参考，但与 1688 的工厂价口径不同，不能混用。",
+    },
+    "amazon_jp": {
+        "portal": "https://developer-docs.amazon.com/sp-api/docs/overview",
+        "requirements": ["Amazon 卖家或供应商账号", "SP-API 开发者注册与角色授权"],
+        "scopes": ["Catalog Items", "Product Pricing", "Orders（需卖家授权）"],
+        "fields": ["商品目录与规格", "当前报价", "报价与商品详情", "订单（限自有店铺）"],
+        "note": "目录匹配与卖家定价是不同能力，不能当作公开全站价格接口使用。",
+    },
+    "rakuten_yahoo_jp": {
+        "portal": "https://developer.yahoo.co.jp/",
+        "requirements": ["各平台开发者账号", "商家授权（商品 API）"],
+        "scopes": ["商品检索与详情", "库存与价格", "订单"],
+        "fields": ["在售价格与库存", "配送与到货天数", "店铺与评价"],
+        "note": "乐天与 Yahoo! Shopping 的接口各自独立，需要分别申请。",
+    },
+    "mercari_jp": {
+        "portal": "https://developer.mercari.com/",
+        "requirements": ["开发者申请与审核", "符合商业使用条款"],
+        "scopes": ["商品搜索（受限）"],
+        "fields": ["二手/个人挂牌价"],
+        "note": "二手与个人定价只作价格背景，不等于新品可复制的定价。",
+    },
+    "xianyu": {
+        "portal": "https://open.goofish.com/",
+        "requirements": ["平台开发者资质"],
+        "scopes": ["暂无通用商品搜索接口"],
+        "fields": ["个人二手挂牌价（仅公开页面）"],
+        "note": "当前没有可申请的全站商品搜索接口，只能用公开页面线索。",
+    },
+    "google_trends": {
+        "portal": "https://developers.google.com/search/apis/trends",
+        "requirements": ["Google Trends API Alpha 申请", "项目与用途说明"],
+        "scopes": ["趋势时间序列", "相关查询与话题"],
+        "fields": ["相对热度序列", "相关词与话题", "地域与时间粒度"],
+        "note": "API 仍处于 Alpha，公开网页搜索拿不到原始时间序列。",
+    },
+    "tiktok": {
+        "portal": "https://developers.tiktok.com/products/research-api/",
+        "requirements": ["研究用途资格与审核", "商业用途另需明确授权的数据服务"],
+        "scopes": ["Research API（研究用途）", "商业数据服务（需单独合同）"],
+        "fields": ["话题与内容热度", "创作者与商品提及"],
+        "note": "Creative Center 的公开页面不等于实时榜单接口。",
+    },
+    "tiktok_shop": {
+        "portal": "https://seller-us.tiktok.com/",
+        "requirements": ["TikTok Shop 商家或开发者授权", "店铺/达人上下文"],
+        "scopes": ["店铺商品", "达人展示", "订单（需店铺授权）"],
+        "fields": ["店铺商品与价格", "达人带货价", "自有店铺订单"],
+        "note": "接口范围绑定获授权的店铺/达人上下文。",
+    },
+    "douyin": {
+        "portal": "https://open.douyin.com/",
+        "requirements": ["企业资质", "开发者应用与 OAuth", "按业务线分别申请 scope"],
+        "scopes": ["热点榜与视频数据", "商品（商城）", "订单与售后（需商家授权）"],
+        "fields": ["热点与内容热度", "商城商品价格", "自营订单"],
+        "note": "官方把热点、视频与电商能力拆成不同接口，未授权前只有公开页面文案可用。",
+    },
+    "kuaishou": {
+        "portal": "https://open.kuaishou.com/",
+        "requirements": ["企业资质", "开发者资质与账号授权"],
+        "scopes": ["内容与话题数据", "小店商品", "广告投放（磁力引擎资质）"],
+        "fields": ["内容热度", "小店商品价格", "广告投放数据"],
+        "note": "直播成交与达人带货数据需要磁力引擎资质单独申请。",
+    },
+}
+
 ROLE_LABELS = {
     "demand": "需求与内容侧",
     "sales": "销售市场侧",

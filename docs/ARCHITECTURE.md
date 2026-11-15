@@ -137,6 +137,8 @@ Agent 输出是非可信建议；服务端按 JSON 格式、来源 ID、长度�
 
 ### Connector 适配器
 
+平台登记表同时保存每个平台的授权准备清单（申请入口、资质、接口 scope、可获得字段与注意事项），连接器目录把它带给界面，作为申请授权前的行动指南。
+
 未来每个平台实现独立 adapter：
 
 - `search(query, market, scope) -> CollectionResult`

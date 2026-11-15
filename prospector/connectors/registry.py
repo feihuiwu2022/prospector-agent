@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prospector.platforms import PLATFORMS, ROLE_LABELS, platform_catalog
+from prospector.platforms import AUTHORIZATION_GUIDES, PLATFORMS, ROLE_LABELS, platform_catalog
 
 
 def connector_status() -> list[dict]:
@@ -23,6 +23,7 @@ def connector_status() -> list[dict]:
             "note": item["note"],
             "authorizationChannel": item["authorizationChannel"],
             "connected": False,
+            "authorizationGuide": AUTHORIZATION_GUIDES.get(item["id"], {}),
         }
         for item in PLATFORMS.values()
     ]

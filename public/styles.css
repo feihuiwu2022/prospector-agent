@@ -699,3 +699,12 @@ a:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- 平台连接器：授权准备清单 ---------- */
+.connector-guide { margin-top: 9px; border-top: 1px solid var(--line); padding-top: 8px; }
+.connector-guide summary { cursor: pointer; color: var(--brand); font-size: 9px; letter-spacing: .04em; }
+.guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 9px; margin-top: 8px; }
+.guide-grid b { display: block; font-size: 9px; color: var(--ink-2); margin-bottom: 3px; }
+.guide-grid ul { margin: 0; padding-left: 13px; color: var(--ink-3); font-size: 8.5px; line-height: 1.6; }
+.guide-grid p { margin: 0; font-size: 8.5px; color: var(--ink-3); word-break: break-all; }
+.guide-note { margin: 8px 0 0; color: var(--ink-3); font-size: 8.5px; line-height: 1.6; }

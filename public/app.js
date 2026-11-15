@@ -1310,6 +1310,20 @@ function renderDiscovery() {
   const roleGroups = roleOrder.map((role) => {
     const items = (state.connectors || []).filter((item) => platformRoles(item).includes(role));
     if (!items.length) return "";
+    const guide = (item) => {
+      const g = item.authorizationGuide;
+      if (!g || !g.portal) return "";
+      const list = (items) => (items || []).map((row) => `<li>${esc(row)}</li>`).join("");
+      return `<details class="connector-guide"><summary>授权准备清单</summary>
+        <div class="guide-grid">
+          <div><b>申请入口</b><p><a href="${esc(g.portal)}" target="_blank" rel="noopener noreferrer">${esc(g.portal)}</a></p></div>
+          <div><b>需要资质</b><ul>${list(g.requirements)}</ul></div>
+          <div><b>要申请的接口</b><ul>${list(g.scopes)}</ul></div>
+          <div><b>授权后能拿到的字段</b><ul>${list(g.fields)}</ul></div>
+        </div>
+        <p class="guide-note">${esc(g.note || "")}</p>
+      </details>`;
+    };
     const cards = items.map((item) => `
       <article class="connector-card">
         <div class="connector-card-head"><b>${esc(item.platform)}</b><span class="connector-state ${item.status === "web_search" ? "ok" : item.status === "authorization_required" ? "wait" : ""}">${esc(statusLabel[item.status] || item.status)}</span></div>
@@ -1317,6 +1331,7 @@ function renderDiscovery() {
         <small>${esc(item.note)}</small>
         <div class="connector-channel"><span>授权通道</span>${esc(item.authorizationChannel || "—")}</div>
         <div class="connector-channel"><span>市场归属</span>${esc([item.salesMarket, item.supplyMarket].filter(Boolean).join(" / ") || "—")}</div>
+        ${guide(item)}
       </article>`).join("");
     const title = { demand: "需求与内容侧", sales: "销售市场侧", sourcing: "货源侧（供给来源）" }[role];
     const hint = {
