@@ -755,8 +755,21 @@ function renderPilotPanel(candidate) {
     </form>
     <div class="profit-result" style="margin-top:12px"><div class="profit-metric"><span>结论</span><b class="${review.verdict === "达标" ? "" : "negative"}">${esc(verdictLabel)}</b></div><div class="profit-metric"><span>建议</span><b>${esc(review.recommendation || "待补数据")}</b></div><div class="profit-metric"><span>退款率</span><b>${metrics.refundRate == null ? "—" : `${(metrics.refundRate * 100).toFixed(1)}%`}</b></div><div class="profit-metric"><span>净利率</span><b>${metrics.netMargin == null ? "—" : `${(metrics.netMargin * 100).toFixed(1)}%`}</b></div></div>
     ${findings ? `<ul style="color:#9aa39b;font-size:9px;line-height:1.7">${findings}</ul>` : ""}
+    ${renderReconciliation(candidate)}
     ${renderCalibration(candidate)}
   </section>`;
+}
+
+function renderReconciliation(candidate) {
+  const rec = candidate.reconciliation || {};
+  if (!rec.complete) return "";
+  const money = (value) => (value == null ? "—" : Number(value).toLocaleString("zh-CN"));
+  const rows = (rec.items || []).map((item) => `<tr><td>${esc(item.item)}</td><td>${money(item.amount)}</td><td>${esc(item.note || "")}</td></tr>`).join("");
+  return `<div class="report-list"><b>模型利润与实测利润对照</b>
+    <div class="profit-result"><div class="profit-metric"><span>模型单件贡献</span><b>${money(rec.modelPerOrder)}</b></div><div class="profit-metric"><span>实测单件净利</span><b class="${(rec.actualNetPerOrder || 0) < 0 ? "negative" : ""}">${money(rec.actualNetPerOrder)}</b></div><div class="profit-metric"><span>每单差异</span><b class="${(rec.differencePerOrder || 0) < 0 ? "negative" : ""}">${money(rec.differencePerOrder)}</b></div></div>
+    ${rows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>差异来源</th><th>金额（合计）</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+    ${rec.residual == null ? "" : `<p style="color:#9aa39b;font-size:9px">未归因差额 ${money(rec.residual)}。</p>`}
+    <small class="chat-result-foot">${esc(rec.note || "")}</small></div>`;
 }
 
 function renderCalibration(candidate) {
@@ -990,6 +1003,46 @@ function renderBatchPlan(candidate) {
   return `<section class="panel"><div class="panel-head"><h3>首批与周转</h3><small>由你设定，不预测销量</small></div><div class="profit-result"><div class="profit-metric"><span>首批占用资金</span><b>${money(plan.cashUsed)}</b></div><div class="profit-metric"><span>每日需售出</span><b>${plan.unitsPerDay} 件</b></div><div class="profit-metric"><span>每日贡献利润</span><b class="${(plan.dailyContribution || 0) < 0 ? "negative" : ""}">${money(plan.dailyContribution)}</b></div></div><div class="profit-costs"><div class="cost-row"><span>30 天贡献利润</span><b>${money(plan.monthlyContribution)}</b></div></div><p style="font-size:8px;color:#929b94;line-height:1.6;margin:10px 0 0">${esc(plan.note || "")} 首批 ${plan.batchQty} 件 / ${plan.cashCycleDays} 天回本。</p></section>`;
 }
 
+function archiveMarkdown(candidate) {
+  const parts = [reportMarkdown(candidate)];
+  const landed = candidate.actualCost?.landed;
+  const rec = candidate.reconciliation || {};
+  const plan = candidate.scalePlan || {};
+  const orders = (state.purchaseOrders || []).filter((item) => item.candidateId === candidate.id);
+  const rfqs = (state.rfqs || []).filter((item) => item.candidateId === candidate.id);
+  parts.push("\n## 实际到货与验货\n");
+  if (landed?.complete) {
+    parts.push(`- 实收 ${landed.quantity} 件，单价 ${landed.unitPrice} ${landed.purchaseCurrency}`);
+    parts.push(`- 运费摊薄 ${landed.perUnitShipping} / 关税摊薄 ${landed.perUnitDuty} / 保险摊薄 ${landed.perUnitInsurance} / 破损预留 ${landed.defectCost}`);
+    parts.push(`- 每件到岸成本 ${landed.landedUnitCost} ${landed.purchaseCurrency}（可售 ${landed.usableUnits ?? "-"} 件，已获赔付 ${landed.refunds ?? 0}）`);
+  } else {
+    parts.push("- 尚未录入实际到货成本。");
+  }
+  parts.push("\n## 采购与询价记录\n");
+  for (const rfq of rfqs) {
+    parts.push(`- 询价单「${rfq.title}」：目标 ${(rfq.targets || []).length} 家，回复 ${(rfq.quotes || []).length} 条，状态 ${rfq.status || "-"}`);
+  }
+  for (const order of orders) {
+    parts.push(`- 采购单草案 ${order.platform} · ${order.seller}：${order.quantity} 件 × ${order.unitPrice} ${order.currency} = ${order.amount} ${order.currency}，状态 ${order.status}`);
+  }
+  parts.push("\n## 实测与模型对照\n");
+  if (rec.complete) {
+    parts.push(`- 模型单件贡献 ${rec.modelPerOrder ?? "-"} / 实测单件净利 ${rec.actualNetPerOrder}，每单差异 ${rec.differencePerOrder ?? "-"}`);
+    for (const item of rec.items || []) parts.push(`- ${item.item}：${item.amount}（${item.note}）`);
+    if (rec.residual != null) parts.push(`- 未归因差额：${rec.residual}`);
+  } else {
+    parts.push(`- ${rec.reason || "尚无实测数据。"}`);
+  }
+  if (plan.complete) {
+    parts.push("\n## 扩量测算\n");
+    parts.push(`- 实测日均 ${plan.dailyUnits} 件，实测退款率 ${((plan.refundRate || 0) * 100).toFixed(1)}%`);
+    for (const tier of plan.tiers || []) parts.push(`- ${tier.label}：铺货 ${tier.salesUnits} 件 + 安全库存 ${tier.safetyUnits} 件 = ${tier.totalUnits} 件，资金占用 ${tier.cashUsed ?? "-"} ${tier.currency || ""}`);
+    for (const risk of plan.risks || []) parts.push(`- 风险：${risk}`);
+  }
+  parts.push("\n> 本档案由本地工作台整理，所有价格为记录值或人工录入值；未经复核，不构成采购或投资建议。");
+  return parts.join("\n");
+}
+
 function reportMarkdown(candidate) {
   const rows = Object.entries(candidate.scores || {}).map(([key, value]) => {
     const refs = (value.evidenceIds || []).map((id) => candidate.evidence.find((item) => item.id === id)?.title).filter(Boolean).join("、");
@@ -1036,7 +1089,7 @@ function reportMarkdown(candidate) {
 
 function renderReport(candidate) {
   const markdown = reportMarkdown(candidate);
-  return `<section class="panel"><div class="panel-head"><div><h3>研究报告预览</h3><small style="display:block;margin-top:5px">${esc(candidate.name)} · 更新于 ${fmtDate(candidate.updatedAt)}</small></div><button class="button-secondary" data-action="download-report">导出 Markdown</button></div><div class="hypothesis-box" style="white-space:pre-wrap;font:9px/1.75 'DM Sans','Noto Sans SC',sans-serif;max-height:620px;overflow:auto">${esc(markdown)}</div><div class="bottom-note"><span>ⓘ</span><span>报告摘要只整理当前录入信息；证据状态和利润假设仍需要人工复核。</span></div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h3>研究报告预览</h3><small style="display:block;margin-top:5px">${esc(candidate.name)} · 更新于 ${fmtDate(candidate.updatedAt)}</small></div><button class="button-secondary" data-action="download-report">导出 Markdown</button><button class="button-quiet" data-action="download-archive">导出经营档案</button></div><div class="hypothesis-box" style="white-space:pre-wrap;font:9px/1.75 'DM Sans','Noto Sans SC',sans-serif;max-height:620px;overflow:auto">${esc(markdown)}</div><div class="bottom-note"><span>ⓘ</span><span>报告摘要只整理当前录入信息；证据状态和利润假设仍需要人工复核。</span></div></section>`;
 }
 
 function renderProfile() {
@@ -1563,6 +1616,18 @@ document.addEventListener("click", async (event) => {
       link.click();
       URL.revokeObjectURL(link.href);
       toast("询价单已导出（每家店铺一节，可分开发送）。");
+      return;
+    }
+    if (action === "download-archive") {
+      const candidate = currentCandidate();
+      if (!candidate) return;
+      const blob = new Blob([archiveMarkdown(candidate)], { type: "text/markdown;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${(candidate.name || "archive").replace(/[\\/:*?"<>|]/g, "-")}-经营档案.md`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast("经营档案已导出，可直接交接或存档。");
       return;
     }
     if (action === "download-rfq") {

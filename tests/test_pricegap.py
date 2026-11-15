@@ -561,6 +561,39 @@ class PriceGapScanTest(unittest.TestCase):
         plan = calculate_batch_plan(assumptions, profit, landed)
         self.assertEqual(plan["cashUsed"], 114000.0)
 
+    def test_profit_reconciliation_splits_the_difference(self) -> None:
+        from prospector.domain import reconcile_profit
+
+        candidate = {
+            "assumptions": {
+                "sellingPrice": 2099,
+                "purchasePrice": 1899,
+                "adCost": 20,
+                "returnReserveRate": 0.02,
+            },
+            "profit": {"contributionProfit": 100.0},
+        }
+        pilot = {
+            "complete": True,
+            "verdict": "达标",
+            "metrics": {
+                "orders": 40,
+                "revenue": 80000,
+                "netProfit": 2000,
+                "adCostPerOrder": 30.0,
+                "refundRate": 0.05,
+                "avgOrderValue": 2000,
+            },
+        }
+        rec = reconcile_profit(candidate, pilot, candidate["assumptions"], None)
+        self.assertTrue(rec["complete"])
+        self.assertEqual(rec["actualNetPerOrder"], 50.0)
+        self.assertEqual(rec["differencePerOrder"], -50.0)
+        labels = {item["item"] for item in rec["items"]}
+        self.assertEqual(labels, {"售价差异", "广告成本差异", "退货预留差异", "采购成本差异"})
+        ad_item = next(item for item in rec["items"] if item["item"] == "广告成本差异")
+        self.assertEqual(ad_item["amount"], 400.0)
+
     def test_qc_templates_cover_the_candidate_category(self) -> None:
         from prospector.domain import qc_template
 

@@ -35,6 +35,7 @@ from prospector.domain import (
     build_scale_plan,
     build_supplier_comparison,
     calibrate_assumptions,
+    reconcile_profit,
     evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
@@ -112,6 +113,12 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["pilotReview"] = evaluate_pilot(result["pilot"], profile.get("pilotThresholds"))
     result["scalePlan"] = build_scale_plan(result, result["pilotReview"], profile, result["batchPlan"])
     result["calibration"] = calibrate_assumptions(result.get("assumptions", {}), result["pilotReview"])
+    result["reconciliation"] = reconcile_profit(
+        result,
+        result["pilotReview"],
+        result.get("assumptions", {}),
+        ((result.get("actualCost") or {}).get("landed") or {}),
+    )
     result["resourceFit"] = resource_fit(result, profile)
     return result
 

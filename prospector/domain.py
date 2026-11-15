@@ -410,6 +410,7 @@ def evaluate_pilot(pilot: dict, thresholds: dict | None = None) -> dict:
             "revenue": revenue,
             "netProfit": net_profit,
             "conversionRate": round(conversion_rate, 4) if conversion_rate is not None else None,
+            "avgOrderValue": round(revenue / orders, 2) if orders else None,
             "refundRate": round(refund_rate, 4) if refund_rate is not None else None,
             "netMargin": round(net_margin, 4) if net_margin is not None else None,
             "adCostPerOrder": round(ad_cost_per_order, 2) if ad_cost_per_order is not None else None,
@@ -713,6 +714,63 @@ def build_landed_cost(actual: dict) -> dict:
         "totalDuty": duty,
         "totalInsurance": insurance,
         "note": "运费、关税与保险按实收数量摊到每件；破损率按你填的比例计入成本；验货异常会减少可售数量并扣掉已获赔付。",
+    }
+
+
+def reconcile_profit(candidate: dict, pilot_review: dict, assumptions: dict, landed: dict | None = None) -> dict:
+    """Compare the modelled contribution profit with the measured one.
+
+    The difference is split into the parts we can name (selling price,
+    ad cost, refunds, purchase cost) and a residual for everything we did
+    not record.  The residual stays visible instead of being hidden.
+    """
+    if not pilot_review or not pilot_review.get("complete"):
+        return {"complete": False, "reason": "还没有真实小测数据，无法与利润模型对照。", "items": []}
+    metrics = pilot_review.get("metrics") or {}
+    orders = metrics.get("orders") or 0
+    revenue = metrics.get("revenue") or 0
+    net_profit = metrics.get("netProfit") or 0
+    if orders <= 0:
+        return {"complete": False, "reason": "订单数为 0，无法按单核算。", "items": []}
+    actual_per_order = round(net_profit / orders, 2)
+    profit = candidate.get("profit") or {}
+    model_per_order = profit.get("contributionProfit")
+    items = []
+
+    selling_gap = None
+    if assumptions.get("sellingPrice") not in (None, "") and metrics.get("avgOrderValue"):
+        selling_gap = (metrics["avgOrderValue"] - float(assumptions["sellingPrice"])) * orders
+    if selling_gap is not None:
+        items.append({"item": "售价差异", "amount": round(selling_gap, 2), "note": "实测客单价与假设售价之差 × 订单数。"})
+
+    if metrics.get("adCostPerOrder") is not None and assumptions.get("adCost") not in (None, ""):
+        ad_gap = (metrics["adCostPerOrder"] - float(assumptions["adCost"])) * orders
+        items.append({"item": "广告成本差异", "amount": round(ad_gap, 2), "note": "实测每单广告成本与假设值之差 × 订单数。"})
+
+    if metrics.get("refundRate") is not None and assumptions.get("returnReserveRate") not in (None, ""):
+        refund_gap = (float(assumptions["returnReserveRate"]) - metrics["refundRate"]) * revenue
+        items.append({"item": "退货预留差异", "amount": round(refund_gap, 2), "note": "假设预留与实测退款率之差 × 销售额。"})
+
+    unit_cost = None
+    if landed and landed.get("complete") and landed.get("landedUnitCost"):
+        unit_cost = landed["landedUnitCost"]
+    elif assumptions.get("purchasePrice") not in (None, ""):
+        unit_cost = float(assumptions["purchasePrice"])
+    if unit_cost is not None:
+        cost_gap = (unit_cost - float(assumptions.get("purchasePrice") or unit_cost)) * orders
+        items.append({"item": "采购成本差异", "amount": round(cost_gap, 2), "note": "真实到岸成本与假设采购价之差 × 订单数。"})
+
+    named = sum(item["amount"] for item in items)
+    residual = round(actual_per_order * orders - named, 2) if model_per_order is None else None
+    return {
+        "complete": True,
+        "orders": orders,
+        "actualNetPerOrder": actual_per_order,
+        "modelPerOrder": model_per_order,
+        "differencePerOrder": round(actual_per_order - model_per_order, 2) if model_per_order is not None else None,
+        "items": items,
+        "residual": residual,
+        "note": "归因只列出能对照的项；剩余差额往往来自未录入的费用或口径差异，需要你自己核对。",
     }
 
 
