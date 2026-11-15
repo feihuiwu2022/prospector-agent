@@ -19,8 +19,10 @@ from prospector.agents import build_tasks, now_iso, refresh_task_statuses
 from prospector.agent_discovery import run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
 from prospector.agent_pricegap import (
+    advance_candidate_workflow,
     build_price_gap_candidates,
     compute_platform_profit,
+    merge_purchase_checklist,
     run_price_gap_scan,
     summarize_price_history,
 )
@@ -234,6 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 "categories": CATEGORIES,
                 "discoveryRuns": sorted(data.get("discoveryRuns", []), key=lambda item: item.get("createdAt", ""), reverse=True),
                 "conversations": sorted(data.get("conversations", []), key=lambda item: item.get("updatedAt", ""), reverse=True),
+                "priceObservations": data.get("priceObservations", [])[-300:],
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -1053,7 +1056,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self.send_json(404, {"error": "没有找到这个接口。"})
             return
-        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions"}
+        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist"}
 
         def update_candidate(data):
             candidate = find_candidate(data, match.group(1))
@@ -1070,6 +1073,14 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if key == "status" and value not in {"researching", "ready_for_test", "paused", "archived"}:
                         raise ValueError("研究状态无效。")
+                    if key == "purchaseChecklist":
+                        if not isinstance(value, list):
+                            raise ValueError("采购清单必须是列表。")
+                        candidate["purchaseChecklist"] = merge_purchase_checklist(
+                            candidate.get("purchaseChecklist", []), value
+                        )
+                        advance_candidate_workflow(candidate)
+                        continue
                     candidate[key] = value
             candidate["updatedAt"] = utc_now()
             return candidate_view(candidate, data.get("profile", DEFAULT_PROFILE))

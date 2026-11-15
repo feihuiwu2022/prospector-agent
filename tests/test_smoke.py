@@ -202,6 +202,51 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertIsNone(payload["estimate"])
         self.assertTrue(payload["estimateError"])
 
+    def test_checklist_update_advances_the_sourcing_stage(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "checklist-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "比价候选",
+                "category": "其他",
+                "hypothesis": "采购待办推进",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "中国",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {"sellingPrice": 2099, "sellingCurrency": "CNY", "purchasePrice": 1899, "purchaseCurrency": "CNY"},
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "purchaseChecklist": [
+                    {"id": "price_evidence", "item": "采购参考价", "status": "已有线索"},
+                    {"id": "moq", "item": "确认起订量与阶梯价", "status": "待确认"},
+                ],
+                "workflowStages": [
+                    {"id": "sourcing", "number": 3, "title": "寻找货源", "status": "partial", "note": ""},
+                    {"id": "economics", "number": 4, "title": "利润核算", "status": "partial", "note": ""},
+                ],
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, payload = _post(
+            f"{self.base}/api/candidates/{candidate_id}",
+            {"purchaseChecklist": [{"id": "moq", "done": True}]},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        stages = {stage["id"]: stage for stage in payload["workflowStages"]}
+        self.assertEqual(stages["sourcing"]["status"], "completed")
+        self.assertEqual(stages["economics"]["status"], "partial")
+        self.assertTrue(payload["purchaseChecklist"][1]["done"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

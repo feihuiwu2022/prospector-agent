@@ -572,8 +572,15 @@ function renderPriceGapContext(candidate) {
 }
 
 function renderPurchaseChecklist(candidate) {
-  const rows = (candidate.purchaseChecklist || []).map((item) => `<tr><td>${esc(item.item)}</td><td><span class="status-pill ${item.status === "已有线索" ? "done" : "wait"}">${esc(item.status)}</span></td><td>${esc(item.note || "")}</td></tr>`).join("");
-  return `<section class="panel"><div class="panel-head"><h3>采购待办清单</h3><small>除价格外都需要你向卖家确认</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>事项</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  const items = candidate.purchaseChecklist || [];
+  const rows = items.map((item) => {
+    const tickable = item.id !== "price_evidence";
+    const status = item.done ? "已确认" : item.status;
+    return `<tr><td>${tickable ? `<label class="check-option" style="display:inline-flex;gap:6px;align-items:flex-start"><input type="checkbox" data-check="checklist" data-item="${esc(item.id)}" ${item.done ? "checked" : ""} /><span>${esc(item.item)}</span></label>` : esc(item.item)}</td><td><span class="status-pill ${item.done || item.status === "已有线索" ? "done" : "wait"}">${esc(status)}</span></td><td>${esc(item.note || "")}</td></tr>`;
+  }).join("");
+  const done = items.filter((item) => item.id !== "price_evidence" && item.done).length;
+  const total = items.filter((item) => item.id !== "price_evidence").length;
+  return `<section class="panel"><div class="panel-head"><h3>采购待办清单</h3><small>除价格外都需要你向卖家确认 · 已确认 ${done}/${total}</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>事项</th><th>状态</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>逐项确认后，“寻找货源”阶段会自动推进；MOQ、交期与发票仍以卖家书面答复为准。</span></div></section>`;
 }
 
 function scoreRows(candidate) {
@@ -827,6 +834,23 @@ function renderDiscovery() {
     <section class="panel"><div class="panel-head"><div><h3>Agent 选品运行记录</h3><small>每次扫描保留策略、运行状态、结果数量与时间</small></div></div><div class="discovery-run-list">${runs || `<div class="table-empty" style="padding:22px"><h3>暂无 Agent 运行</h3><p>回到工作台，从四大策略中启动一次自动选品。</p></div>`}</div></section>
     <div class="bottom-note"><span>ⓘ</span><span>仅 MiniMax Web Search 产生公开搜索摘要；系统不模拟登录、不绕过访问限制，也不会把摘要称作销量或真实成交价。</span></div>
   `;
+}
+
+function renderLeadLibrary(observations) {
+  if (!observations.length) return "";
+  const groups = new Map();
+  for (const item of observations) {
+    const key = `${item.platform || "未知平台"}|${(item.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1")}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const rows = [...groups.entries()].map(([key, items]) => {
+    const sorted = [...items].sort((a, b) => String(b.observedAt).localeCompare(String(a.observedAt)));
+    const latest = sorted[0];
+    const products = [...new Set(sorted.map((item) => item.product).filter(Boolean))];
+    return `<tr><td><b>${esc(latest.platform || "未知平台")}</b><small>${esc(products.slice(0, 2).join("、"))}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${sorted.length} 次观察</td><td>${latest.url ? `<a href="${esc(latest.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td></tr>`;
+  }).join("");
+  return `<section class="panel"><div class="panel-head"><h3>货源线索库</h3><small>比价时见过的页面与店铺，按最近一次报价排序</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 商品</th><th>最近可见报价</th><th>观察日期</th><th>次数</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>线索库只是“某个页面在某天显示过这个价”，不是供应商能力、MOQ 或可稳定拿货的证明。</span></div></section>`;
 }
 
 function showNewModal() {
@@ -1184,8 +1208,26 @@ document.addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message, true); }
 });
 
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target.dataset && target.dataset.check === "checklist") {
+    const candidate = currentCandidate();
+    if (!candidate) return;
+    const updates = (candidate.purchaseChecklist || []).map((item) => ({
+      id: item.id,
+      done: item.id === target.dataset.item ? target.checked : !!item.done,
+    }));
+    try {
+      await api(`/api/candidates/${encodeURIComponent(candidate.id)}`, { method: "PATCH", body: JSON.stringify({ purchaseChecklist: updates }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("采购待办已更新，六步流程状态同步推进。");
+    } catch (error) {
+      toast(error.message, true);
+    }
+    return;
+  }
   if (!(target instanceof HTMLSelectElement)) return;
   if (target.dataset.change === "chat-market") {
     state.chatMarket = target.value;

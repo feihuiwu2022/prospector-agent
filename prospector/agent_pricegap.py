@@ -731,6 +731,57 @@ def summarize_price_history(history: list[dict]) -> dict:
     return {"series": series, "alerts": alerts, "threshold": PRICE_ALERT_THRESHOLD}
 
 
+def merge_purchase_checklist(existing: list, updates: list) -> list:
+    """Apply the operator's ticks to the stored checklist.
+
+    Only the ``done`` flag comes from the client; the wording stays in the
+    server's copy so the client cannot rewrite the checklist itself.
+    """
+    done_ids = {
+        str(item.get("id"))
+        for item in updates
+        if isinstance(item, dict) and item.get("id") and item.get("done")
+    }
+    merged = []
+    for item in existing:
+        row = dict(item)
+        row["done"] = str(row.get("id", "")) in done_ids
+        merged.append(row)
+    return merged
+
+
+def advance_candidate_workflow(candidate: dict) -> dict:
+    """Move the six stages forward when the operator finished the to-dos.
+
+    The sourcing stage only completes when every purchase to-do is confirmed
+    by a human; the economics stage only completes when the profit model has
+    every input filled in.
+    """
+    from prospector.domain import calculate_profit  # local import avoids a cycle
+
+    stages = candidate.get("workflowStages") or []
+    checklist = candidate.get("purchaseChecklist") or []
+    open_items = [item for item in checklist if item.get("id") != "price_evidence" and not item.get("done")]
+    profit = calculate_profit(candidate.get("assumptions", {}))
+    for stage in stages:
+        if stage.get("id") == "sourcing":
+            if checklist and not open_items:
+                stage["status"] = "completed"
+                stage["note"] = "采购待办已由人工逐项确认（起订量、书面报价、资质、样品、时效、验货、到岸成本）。"
+            else:
+                stage["status"] = "partial"
+                stage["note"] = f"还有 {len(open_items)} 项采购待办未确认；MOQ、交期与发票不能由公开页面推断。"
+        elif stage.get("id") == "economics":
+            if profit.get("complete"):
+                stage["status"] = "completed"
+                stage["note"] = "利润假设已填齐，按你填的费率与成本计算了单件贡献利润。"
+            else:
+                stage["status"] = "partial"
+                stage["note"] = "费用或汇率未填齐，利润显示为待核验，不给出确定数字。"
+    candidate["workflowStages"] = stages
+    return candidate
+
+
 def build_purchase_checklist(product: str, spec: dict) -> list[dict]:
     """The sourcing to-dos behind a price gap.
 
@@ -739,6 +790,7 @@ def build_purchase_checklist(product: str, spec: dict) -> list[dict]:
     """
     checklist = [
         {
+            "id": "price_evidence",
             "item": f"采购参考价 {spec['sourcePrice']} {spec['sourceCurrency']}（{spec['sourcePlatform']}"
                     + (f" · {spec.get('sourceSeller')}" if spec.get("sourceSeller") else "")
                     + "，公开搜索摘要可见价）",
@@ -746,36 +798,43 @@ def build_purchase_checklist(product: str, spec: dict) -> list[dict]:
             "note": "未打开商品页核实，需确认是否含配件、赠品与店铺优惠。",
         },
         {
+            "id": "moq",
             "item": "确认起订量与阶梯价",
             "status": "待确认",
             "note": "公开页面没有 MOQ 与阶梯报价，必须向卖家索取。",
         },
         {
+            "id": "quote",
             "item": "索取书面报价与付款方式",
             "status": "待执行",
             "note": "口头价格不作为利润依据；需要可追溯的报价记录。",
         },
         {
+            "id": "invoice",
             "item": "确认是否可开票与主体资质",
             "status": "待确认",
             "note": "跨境采购还要核对报关与进口主体要求。",
         },
         {
+            "id": "sample",
             "item": "下样并核对型号/配置/颜色",
             "status": "待执行",
             "note": f"目标配置：{spec['config']}；同款不同颜色与套装会影响价差。",
         },
         {
+            "id": "leadtime",
             "item": "确认发货地、时效与运费",
             "status": "待确认",
             "note": "到货时效直接决定小测窗口能否成立。",
         },
         {
+            "id": "qc",
             "item": "验货清单（外观、配件、铭牌、序列号）",
             "status": "待执行",
             "note": "验货要求由你确定，系统不代设标准。",
         },
         {
+            "id": "landed",
             "item": "核算到岸成本（头程、关税、破损率）",
             "status": "待确认",
             "note": "这些数字不在公开页面上，需要你补进利润模型。",
@@ -783,6 +842,7 @@ def build_purchase_checklist(product: str, spec: dict) -> list[dict]:
     ]
     if spec.get("sourcePromo"):
         checklist.insert(1, {
+            "id": "promo_check",
             "item": "复核低价是否为限时补贴或清仓价",
             "status": "待确认",
             "note": "促销价通常不可持续，直接按它备货风险很高。",

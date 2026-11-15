@@ -260,6 +260,32 @@ class PriceGapScanTest(unittest.TestCase):
         for item in checklist:
             self.assertIn(item["status"], {"已有线索", "待确认", "待执行"})
 
+    def test_checklist_ticks_advance_the_workflow(self) -> None:
+        from prospector.agent_pricegap import advance_candidate_workflow, merge_purchase_checklist
+
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        candidate = pricegap.build_price_gap_candidates(
+            "OPPO K13s", result, {"market": "中国", "sourcingCountry": "中国"}
+        )[0]
+        stages = {stage["id"]: stage for stage in candidate["workflowStages"]}
+        self.assertEqual(stages["sourcing"]["status"], "partial")
+
+        updates = [{"id": item["id"], "done": True} for item in candidate["purchaseChecklist"]]
+        candidate["purchaseChecklist"] = merge_purchase_checklist(candidate["purchaseChecklist"], updates)
+        advance_candidate_workflow(candidate)
+        stages = {stage["id"]: stage for stage in candidate["workflowStages"]}
+        self.assertEqual(stages["sourcing"]["status"], "completed")
+        # Costs are still missing, so the economics stage stays open.
+        self.assertEqual(stages["economics"]["status"], "partial")
+
+    def test_checklist_merging_keeps_server_wording(self) -> None:
+        from prospector.agent_pricegap import merge_purchase_checklist
+
+        existing = [{"id": "moq", "item": "确认起订量与阶梯价", "status": "待确认"}]
+        merged = merge_purchase_checklist(existing, [{"id": "moq", "done": True, "item": "改成别的"}])
+        self.assertTrue(merged[0]["done"])
+        self.assertEqual(merged[0]["item"], "确认起订量与阶梯价")
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 
