@@ -755,9 +755,17 @@ function renderPilotPanel(candidate) {
     </form>
     <div class="profit-result" style="margin-top:12px"><div class="profit-metric"><span>结论</span><b class="${review.verdict === "达标" ? "" : "negative"}">${esc(verdictLabel)}</b></div><div class="profit-metric"><span>建议</span><b>${esc(review.recommendation || "待补数据")}</b></div><div class="profit-metric"><span>退款率</span><b>${metrics.refundRate == null ? "—" : `${(metrics.refundRate * 100).toFixed(1)}%`}</b></div><div class="profit-metric"><span>净利率</span><b>${metrics.netMargin == null ? "—" : `${(metrics.netMargin * 100).toFixed(1)}%`}</b></div></div>
     ${findings ? `<ul style="color:#9aa39b;font-size:9px;line-height:1.7">${findings}</ul>` : ""}
+    ${renderCostChecks(candidate)}
     ${renderReconciliation(candidate)}
     ${renderCalibration(candidate)}
   </section>`;
+}
+
+function renderCostChecks(candidate) {
+  const checks = candidate.costChecks || [];
+  if (!checks.length) return "";
+  const rows = checks.map((check) => `<tr><td>${esc(check.label)}</td><td>${esc(check.note || "")}</td></tr>`).join("");
+  return `<div class="report-list"><b>待查成本项（实测与模型存在未归因差额）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>成本项</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">这些项目已自动进入采购待办清单，逐项确认后差异才算查清。</small></div>`;
 }
 
 function renderReconciliation(candidate) {
@@ -1210,16 +1218,45 @@ function renderBoard() {
     filtered[name] = filter ? items.filter((item) => (item.market || "") === filter) : items;
   }
   const block = (title, hint, items) => `<section class="panel"><div class="panel-head"><div><h3>${esc(title)}</h3><small>${esc(hint)}</small></div><span class="connector-count">${items.length}</span></div>${items.length ? `<div class="discovery-run-list">${items.map((candidate) => `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(candidate.category || "研究项目")} · ${esc(candidate.market || "")} / ${esc(candidate.platform || "")}</span><h3>${esc(candidate.name)}</h3></div><time>${fmtDate(candidate.updatedAt)}</time></div><p class="run-signal-note">${esc(boardNote(candidate))}</p><div class="run-signal-metrics"><span>${esc(candidate.status || "")}</span><span>${(candidate.evidence || []).length} 条来源</span><span>${(candidate.workflowStages || []).filter((stage) => stage.status === "completed").length}/6 步完成</span></div><div class="candidate-card-actions"><button class="button-secondary" data-action="open" data-id="${esc(candidate.id)}">查看候选</button></div></article>`).join("")}</div>` : `<div class="table-empty" style="padding:22px"><p>${esc(title)}里暂时没有内容。</p></div>`}</section>`;
+  const comparison = renderCandidateComparison();
   content.innerHTML = `
     <div class="page-kicker">Decision board</div>
     <div class="page-heading"><div><h1>决策看板</h1><p>按“需要你做什么”排列候选：待决策、缺数据、可扩量、暂缓与已淘汰。</p></div><button class="button-quiet" data-action="home">返回工作台</button></div>
     <div class="chat-composer-context" style="margin-bottom:12px"><label>按市场筛选<select name="boardMarket" data-change="board-market"><option value="">全部市场</option>${markets.map((market) => `<option value="${esc(market)}" ${filter === market ? "selected" : ""}>${esc(market)}</option>`).join("")}</select></label></div>
+    ${comparison}
     ${block("待我决策", "证据齐了、等你继续研究或淘汰的候选", filtered["待我决策"])}
     ${block("缺数据", "流程里还有待补数据或被阻塞的阶段", filtered["缺数据"])}
     ${block("可扩量", "小测已达标，可以看备货测算", filtered["可扩量"])}
     ${block("暂缓", "你主动挂起的候选", filtered["暂缓"])}
     ${block("已淘汰", "已归档或被淘汰的候选，理由留档", filtered["已淘汰"])}
   `;
+}
+
+function renderCandidateComparison() {
+  const candidates = (state.candidates || []).filter((item) => item.status !== "archived");
+  if (!candidates.length) return "";
+  const rows = candidates.map((candidate) => {
+    const stages = candidate.workflowStages || [];
+    const done = stages.filter((stage) => stage.status === "completed").length;
+    const pilot = candidate.pilotReview || {};
+    const profit = candidate.profit || {};
+    const plan = candidate.scalePlan || {};
+    const model = profit.complete ? Number(profit.contributionProfit).toLocaleString("zh-CN") : "—";
+    const actual = pilot.metrics?.netProfit != null && pilot.metrics?.orders
+      ? `${(pilot.metrics.netProfit / pilot.metrics.orders).toFixed(2)}`
+      : "—";
+    return `<tr>
+      <td><b>${esc(candidate.name)}</b><small>${esc(candidate.market || "")} / ${esc(candidate.platform || "")}</small></td>
+      <td>${done}/6</td>
+      <td>${(candidate.evidence || []).length}</td>
+      <td>${model}</td>
+      <td>${actual}</td>
+      <td>${plan.complete && plan.tiers?.length ? Number(plan.tiers[plan.tiers.length - 1].cashUsed ?? 0).toLocaleString("zh-CN") : "—"}</td>
+      <td>${esc(pilot.verdict || "—")}</td>
+      <td><button class="button-quiet" data-action="open" data-id="${esc(candidate.id)}">查看</button></td>
+    </tr>`;
+  }).join("");
+  return `<section class="panel"><div class="panel-head"><h3>候选横向对比</h3><small>同屏比较进度、来源、模型利润、实测单件净利与备货资金</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>候选</th><th>阶段</th><th>来源</th><th>模型单件贡献</th><th>实测单件净利</th><th>备货资金占用</th><th>小测结论</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 
 function boardNote(candidate) {

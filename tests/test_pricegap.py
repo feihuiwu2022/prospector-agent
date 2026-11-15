@@ -594,6 +594,23 @@ class PriceGapScanTest(unittest.TestCase):
         ad_item = next(item for item in rec["items"] if item["item"] == "广告成本差异")
         self.assertEqual(ad_item["amount"], 400.0)
 
+    def test_unexplained_gap_becomes_a_cost_checklist(self) -> None:
+        from prospector.domain import suggest_cost_checks
+
+        reconciliation = {"complete": True, "residual": -3000.0}
+        assumptions = {"sellingPrice": 2099, "purchasePrice": 1899}
+        checks = suggest_cost_checks(assumptions, reconciliation, revenue=80000)
+        labels = {item["label"] for item in checks}
+        self.assertIn("平台佣金", labels)
+        self.assertIn("广告成本", labels)
+        self.assertIn("包材与赠品", labels)
+        self.assertIn("仓储与操作费", labels)
+
+        # A small residual stays silent.
+        self.assertEqual(suggest_cost_checks(assumptions, {"complete": True, "residual": -5.0}, revenue=80000), [])
+        # Nothing to check without measured data.
+        self.assertEqual(suggest_cost_checks(assumptions, {"complete": False}, revenue=80000), [])
+
     def test_qc_templates_cover_the_candidate_category(self) -> None:
         from prospector.domain import qc_template
 

@@ -36,6 +36,7 @@ from prospector.domain import (
     build_supplier_comparison,
     calibrate_assumptions,
     reconcile_profit,
+    suggest_cost_checks,
     evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
@@ -118,6 +119,11 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
         result["pilotReview"],
         result.get("assumptions", {}),
         ((result.get("actualCost") or {}).get("landed") or {}),
+    )
+    result["costChecks"] = suggest_cost_checks(
+        result.get("assumptions", {}),
+        result["reconciliation"],
+        (result.get("pilotReview", {}) or {}).get("metrics", {}).get("revenue"),
     )
     result["resourceFit"] = resource_fit(result, profile)
     return result
@@ -1672,6 +1678,28 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("小测数据必须是对象。")
                         candidate["pilot"] = {**(candidate.get("pilot") or {}), **value}
                         thresholds = (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds")
+                        review = evaluate_pilot(candidate["pilot"], thresholds)
+                        reconciliation = reconcile_profit(
+                            {**candidate, "profit": calculate_profit(candidate.get("assumptions", {}))},
+                            review,
+                            candidate.get("assumptions", {}),
+                            ((candidate.get("actualCost") or {}).get("landed") or {}),
+                        )
+                        for check in suggest_cost_checks(
+                            candidate.get("assumptions", {}),
+                            reconciliation,
+                            (review.get("metrics") or {}).get("revenue"),
+                        ):
+                            checklist = candidate.setdefault("purchaseChecklist", [])
+                            if any(str(item.get("id")) == check["id"] for item in checklist):
+                                continue
+                            checklist.append({
+                                "id": check["id"],
+                                "item": f"核对成本项：{check['label']}",
+                                "status": "待确认",
+                                "note": check["note"] + "（实测与模型存在未归因差额）",
+                                "done": False,
+                            })
                         advance_candidate_workflow(candidate, thresholds)
                         continue
                     if key == "purchaseChecklist":

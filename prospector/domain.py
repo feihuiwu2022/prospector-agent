@@ -774,6 +774,50 @@ def reconcile_profit(candidate: dict, pilot_review: dict, assumptions: dict, lan
     }
 
 
+COST_CATALOG = (
+    ("referralRate", "平台佣金"),
+    ("adCost", "广告成本"),
+    ("fulfillmentCost", "履约与运费"),
+    ("returnReserveRate", "退货预留"),
+    ("dutyTaxCost", "关税及进口税费"),
+    ("inboundCost", "头程与入仓"),
+    ("otherCost", "其他单件成本"),
+)
+
+SOFT_COST_ITEMS = (
+    ("包材与赠品", "包装箱、说明书、赠品、卡片等常被忽略的单件成本。"),
+    ("仓储与操作费", "头程之后的入仓、仓储、上架与操作费用。"),
+    ("退货逆向物流与损耗", "退货回程、翻新与不可二次销售的部分。"),
+    ("客服与售后成本", "客服、赔付、退换货处理的人力与赔付成本。"),
+)
+
+
+def suggest_cost_checks(assumptions: dict, reconciliation: dict, revenue: float | None = None) -> list[dict]:
+    """Turn an unexplained profit gap into a short list of things to look for.
+
+    The list never claims a number; it only says which common cost lines are
+    not recorded yet, so the operator can check them one by one.
+    """
+    if not reconciliation or not reconciliation.get("complete"):
+        return []
+    residual = reconciliation.get("residual")
+    if residual is None:
+        return []
+    threshold = abs(float(revenue or 0)) * 0.02
+    if abs(residual) < max(threshold, 1.0):
+        return []
+    missing = [label for key, label in COST_CATALOG if assumptions.get(key) in (None, "")]
+    items = [
+        {"id": f"cost_{key}", "label": label, "note": "利润模型里还没有这一项。"}
+        for key, label in COST_CATALOG
+        if assumptions.get(key) in (None, "")
+    ]
+    items.extend({"id": f"soft_{index}", "label": label, "note": note} for index, (label, note) in enumerate(SOFT_COST_ITEMS))
+    if not missing:
+        return []
+    return items
+
+
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")
