@@ -471,6 +471,29 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertIn("measuredNetMargin", fields)
         self.assertEqual(calibrate_assumptions({}, {"complete": False}), [])
 
+    def test_supplier_comparison_ranks_only_what_was_answered(self) -> None:
+        from prospector.domain import build_supplier_comparison
+
+        rfq = {
+            "targets": [
+                {"platform": "淘宝 / 天猫", "seller": "shop-a.taobao.com"},
+                {"platform": "京东", "seller": "mall.jd.com"},
+            ],
+            "quotes": [
+                {"platform": "淘宝 / 天猫", "seller": "shop-a.taobao.com", "unitPrice": 1820, "moq": 100, "leadTimeDays": 10, "currency": "CNY", "invoice": "可开票"},
+                {"platform": "京东", "seller": "mall.jd.com", "unitPrice": 1950, "moq": 20, "leadTimeDays": 3, "currency": "CNY"},
+            ],
+        }
+        comparison = build_supplier_comparison(rfq, {"budgetCny": 50000})
+        rows = {row["seller"]: row for row in comparison["rows"]}
+        self.assertTrue(rows["shop-a.taobao.com"]["isCheapest"])
+        self.assertTrue(rows["mall.jd.com"]["isSmallestMoq"])
+        self.assertTrue(rows["mall.jd.com"]["isFastest"])
+        self.assertEqual(rows["shop-a.taobao.com"]["cashNeeded"], 182000.0)
+        self.assertFalse(rows["shop-a.taobao.com"]["withinBudget"])
+        self.assertEqual(comparison["replyRate"], 1.0)
+        self.assertEqual(comparison["missing"], [])
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

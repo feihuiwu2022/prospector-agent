@@ -539,6 +539,74 @@ def build_scale_plan(candidate: dict, pilot_review: dict, profile: dict, batch_p
     }
 
 
+def build_supplier_comparison(rfq: dict, profile: dict) -> dict:
+    """Compare the written quotes of one RFQ side by side.
+
+    Nothing is ranked by reputation: the table only shows what each shop
+    answered, how much cash the minimum order needs, and who answered at all.
+    """
+    quotes = rfq.get("quotes") or []
+    targets = rfq.get("targets") or []
+    budget = profile.get("budgetCny")
+    rows = []
+    for quote in quotes:
+        unit_price = quote.get("unitPrice")
+        moq = quote.get("moq")
+        cash_needed = None
+        if unit_price is not None and moq is not None:
+            cash_needed = round(unit_price * moq, 2)
+        row = {
+            "platform": quote.get("platform", ""),
+            "seller": quote.get("seller", ""),
+            "unitPrice": unit_price,
+            "moq": moq,
+            "leadTimeDays": quote.get("leadTimeDays"),
+            "invoice": quote.get("invoice", ""),
+            "sample": quote.get("sample", ""),
+            "note": quote.get("note", ""),
+            "currency": quote.get("currency", ""),
+            "cashNeeded": cash_needed,
+            "recordedAt": quote.get("recordedAt", ""),
+            "withinBudget": None,
+        }
+        if cash_needed is not None and budget not in (None, "") and row["currency"] == "CNY":
+            try:
+                row["withinBudget"] = cash_needed <= float(budget)
+                row["budget"] = float(budget)
+            except (TypeError, ValueError):
+                row["withinBudget"] = None
+        rows.append(row)
+    priced = [row for row in rows if row["unitPrice"] is not None]
+    cheapest = min(priced, key=lambda row: row["unitPrice"]) if priced else None
+    smallest = min((row for row in rows if row["moq"] is not None), key=lambda row: row["moq"], default=None)
+    fastest = min((row for row in rows if row["leadTimeDays"] is not None), key=lambda row: row["leadTimeDays"], default=None)
+    for row in rows:
+        row["isCheapest"] = bool(cheapest and row is cheapest)
+        row["isSmallestMoq"] = bool(smallest and row is smallest)
+        row["isFastest"] = bool(fastest and row is fastest)
+    answered = {(row.get("platform"), row.get("seller")) for row in rows}
+    notes = []
+    if cheapest:
+        notes.append(f"书面最低价：{cheapest['platform']} · {cheapest['seller']}（{cheapest['unitPrice']} {cheapest['currency']}）。")
+    if smallest and (not cheapest or smallest is not cheapest):
+        notes.append(f"最小起订量：{smallest['platform']} · {smallest['seller']}（MOQ {smallest['moq']}），适合小批量试单。")
+    if fastest and (not cheapest or fastest is not cheapest):
+        notes.append(f"最短交期：{fastest['platform']} · {fastest['seller']}（{fastest['leadTimeDays']} 天）。")
+    if any(row.get("withinBudget") is False for row in rows):
+        notes.append("部分报价的首单资金占用已超过画像里的可投入预算。")
+    missing = [
+        target for target in targets
+        if (target.get("platform"), target.get("seller")) not in answered
+    ]
+    return {
+        "rows": rows,
+        "replyRate": round(len(answered) / len(targets), 4) if targets else None,
+        "missing": [{"platform": item.get("platform"), "seller": item.get("seller")} for item in missing],
+        "notes": notes,
+        "note": "这张表只反映各家书面答复了什么，不构成对店铺质量的评价。",
+    }
+
+
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")

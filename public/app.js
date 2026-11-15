@@ -601,7 +601,19 @@ function renderRfqPanel(candidate) {
       </tr>`;
     }).join("");
     const questions = (rfq.questions || []).map((item) => `<li>${esc(item)}</li>`).join("");
-    return `<div class="report-list"><b>${esc(rfq.title)} · ${esc(rfq.status || "")}</b><button class="button-quiet" data-action="export-rfq-batch" data-rfq="${esc(rfq.id)}">导出全部店铺</button><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>目标店铺</th><th>公开参考价</th><th>状态</th><th>书面报价</th><th>备注</th><th></th></tr></thead><tbody>${targets}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>需要卖家书面回答：${questions ? "" : "无"}</span></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${questions}</ul></div>`;
+    const comparison = rfq.comparison || {};
+    const comparisonRows = (comparison.rows || []).map((row) => `<tr>
+      <td><b>${esc(row.platform)}</b><small>${esc(row.seller)}</small>${row.isCheapest ? `<small class="promo-tag">书面最低价</small>` : ""}${row.isSmallestMoq ? `<small class="promo-tag">最小起订</small>` : ""}${row.isFastest ? `<small class="promo-tag">最快交期</small>` : ""}</td>
+      <td>${row.unitPrice == null ? "—" : `${Number(row.unitPrice).toLocaleString("zh-CN")} ${esc(row.currency || "")}`}</td>
+      <td>${row.moq ?? "—"}</td>
+      <td>${row.leadTimeDays == null ? "—" : `${row.leadTimeDays} 天`}</td>
+      <td>${row.cashNeeded == null ? "—" : `${Number(row.cashNeeded).toLocaleString("zh-CN")} ${esc(row.currency || "")}`}</td>
+      <td>${row.withinBudget === null ? "—" : row.withinBudget ? `<span class="status-pill done">在预算内</span>` : `<span class="status-pill wait">超预算</span>`}</td>
+      <td>${esc(row.invoice || row.note || "—")}</td>
+    </tr>`).join("");
+    const comparisonBlock = comparisonRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>店铺</th><th>书面单价</th><th>MOQ</th><th>交期</th><th>首单资金</th><th>预算对照</th><th>发票/备注</th></tr></thead><tbody>${comparisonRows}</tbody></table></div>${(comparison.notes || []).map((item) => `<li>${esc(item)}</li>`).join("")}` : "";
+    const replyRate = comparison.replyRate == null ? "—" : `${Math.round(comparison.replyRate * 100)}%`;
+    return `<div class="report-list"><b>${esc(rfq.title)} · ${esc(rfq.status || "")}</b><button class="button-quiet" data-action="export-rfq-batch" data-rfq="${esc(rfq.id)}">导出全部店铺</button>${rfq.status === "待发送" ? `<button class="button-quiet" data-action="mark-rfq-sent" data-rfq="${esc(rfq.id)}">标记已发送</button>` : ""}<small style="display:block;margin:6px 0">回复率 ${replyRate} · 截止日期 ${esc(rfq.dueDate || "未设置")} · 未回复 ${(comparison.missing || []).length} 家</small>${comparisonBlock}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>目标店铺</th><th>公开参考价</th><th>状态</th><th>书面报价</th><th>备注</th><th></th></tr></thead><tbody>${targets}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>需要卖家书面回答：${questions ? "" : "无"}</span></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${questions}</ul></div>`;
   }).join("");
   return `<section class="panel"><div class="panel-head"><h3>询价单与报价回收</h3><small>发给多家店铺，再把书面答复收回</small>${createButton}</div>${blocks}</section>`;
 }
@@ -1021,6 +1033,7 @@ async function renderMetrics() {
         <article><b>证据覆盖</b><p>来源 ${metrics.evidence.totalSources} 条 · 平均每候选 ${metrics.evidence.avgSourcesPerCandidate} 条 · ${metrics.evidence.candidatesWithoutSources} 个候选没有来源。</p></article>
         <article><b>人工审核</b><p>继续 ${metrics.reviews.continue} · 暂缓 ${metrics.reviews.hold} · 淘汰 ${metrics.reviews.reject}。</p></article>
         <article><b>小测与货源</b><p>有真实小测数据 ${metrics.pilot.withData} 个（达标 ${metrics.pilot.passed}）· 货源档案 ${metrics.suppliers.total} 家。</p></article>
+        <article><b>询价回收</b><p>询价单 ${metrics.rfqs?.total || 0} 张 · 目标店铺 ${metrics.rfqs?.targets || 0} 家 · 收到书面报价 ${metrics.rfqs?.quotes || 0} 条。</p></article>
       </div>
       <section class="panel"><div class="panel-head"><h3>按策略的候选与审核结果</h3><small>看哪条策略产出的候选更容易被留下</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>策略</th><th>候选</th><th>继续</th><th>暂缓</th><th>淘汰</th></tr></thead><tbody>${strategyRows || `<tr><td colspan="5">暂无数据</td></tr>`}</tbody></table></div></section>
       <section class="panel"><div class="panel-head"><h3>淘汰理由分布</h3><small>下一轮发现可以避开这些坑</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>理由</th><th>次数</th></tr></thead><tbody>${reasonRows || `<tr><td colspan="2">还没有淘汰记录</td></tr>`}</tbody></table></div></section>
@@ -1158,6 +1171,8 @@ function renderRfqArchive(rfqs) {
     <td><b>${esc(rfq.title || rfq.product || "")}</b><small>${esc(rfq.spec || "")}</small></td>
     <td>${(rfq.targets || []).length} 家</td>
     <td>${(rfq.quotes || []).length} 条回复</td>
+    <td>${rfq.comparison?.replyRate == null ? "—" : `${Math.round(rfq.comparison.replyRate * 100)}%`}</td>
+    <td>${esc(rfq.dueDate || "未设置")}</td>
     <td><span class="status-pill ${rfq.status === "已齐" ? "done" : "wait"}">${esc(rfq.status || "")}</span></td>
     <td>${esc(rfq.createdAt ? fmtDate(rfq.createdAt) : "")}</td>
   </tr>`).join("");
@@ -1319,6 +1334,7 @@ document.addEventListener("click", async (event) => {
         return;
       }
       const questions = (candidate.purchaseChecklist || []).filter((item) => item.id !== "price_evidence").map((item) => item.item);
+      const dueDate = window.prompt("回复截止日期（YYYY-MM-DD，可留空）", "") || "";
       const created = await api("/api/rfqs", {
         method: "POST",
         body: JSON.stringify({
@@ -1385,6 +1401,14 @@ document.addEventListener("click", async (event) => {
       state.view = "detail";
       render();
       toast("报价已记录，并同步到货源档案。");
+      return;
+    }
+    if (action === "mark-rfq-sent") {
+      await api(`/api/rfqs/${encodeURIComponent(button.dataset.rfq)}`, { method: "PATCH", body: JSON.stringify({ sent: true }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("已标记为发送；后续录回的报价会继续累计。");
       return;
     }
     if (action === "export-rfq-batch") {

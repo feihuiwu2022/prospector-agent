@@ -32,6 +32,7 @@ from prospector.platforms import MARKETS, default_platform_for_market, market_gr
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
     build_scale_plan,
+    build_supplier_comparison,
     calibrate_assumptions,
     evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
@@ -255,7 +256,10 @@ class Handler(BaseHTTPRequestHandler):
                 "conversations": sorted(data.get("conversations", []), key=lambda item: item.get("updatedAt", ""), reverse=True),
                 "priceObservations": data.get("priceObservations", [])[-300:],
                 "suppliers": data.get("suppliers", []),
-                "rfqs": data.get("rfqs", []),
+                "rfqs": [
+                    {**item, "comparison": build_supplier_comparison(item, data.get("profile", DEFAULT_PROFILE))}
+                    for item in data.get("rfqs", [])
+                ],
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -315,6 +319,24 @@ class Handler(BaseHTTPRequestHandler):
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
             self.record_quote(quote_match.group(1), body)
+            return
+        rfq_match = re.fullmatch(r"/api/rfqs/([\w-]+)", path)
+        if rfq_match:
+            def update_rfq(data):
+                rfq = next((item for item in data.get("rfqs", []) if item.get("id") == rfq_match.group(1)), None)
+                if rfq is None:
+                    return None
+                if body.get("sent"):
+                    rfq["sentAt"] = utc_now()
+                    if rfq.get("status") == "待发送":
+                        rfq["status"] = "回收中" if rfq.get("quotes") else "已发送"
+                if body.get("dueDate"):
+                    rfq["dueDate"] = str(body.get("dueDate"))[:10]
+                rfq["updatedAt"] = utc_now()
+                return rfq
+
+            result = STORE.update(update_rfq)
+            self.send_json(200 if result else 404, result or {"error": "没有找到这个询价单。"})
             return
         promote_match = re.fullmatch(r"/api/discovery/([\w-]+)/candidate", path)
         if promote_match:
@@ -804,6 +826,8 @@ class Handler(BaseHTTPRequestHandler):
             "targets": targets,
             "questions": questions,
             "quotes": [],
+            "dueDate": str(body.get("dueDate", ""))[:10],
+            "sentAt": "",
             "status": "待发送",
             "createdAt": now,
             "updatedAt": now,
@@ -856,6 +880,7 @@ class Handler(BaseHTTPRequestHandler):
                     target["status"] = "已报价"
             answered = len({(item.get("platform"), item.get("seller")) for item in rfq["quotes"]})
             rfq["status"] = "已齐" if answered >= len(rfq.get("targets", [])) else "回收中"
+            rfq["lastQuoteAt"] = quote.get("recordedAt", utc_now())
             rfq["updatedAt"] = utc_now()
 
             suppliers = data.setdefault("suppliers", [])
@@ -1002,6 +1027,11 @@ class Handler(BaseHTTPRequestHandler):
             "suppliers": {
                 "total": len(data.get("suppliers", [])),
                 "byStatus": _count_by(data.get("suppliers", []), "status"),
+            },
+            "rfqs": {
+                "total": len(data.get("rfqs", [])),
+                "quotes": sum(len(item.get("quotes", [])) for item in data.get("rfqs", [])),
+                "targets": sum(len(item.get("targets", [])) for item in data.get("rfqs", [])),
             },
             "note": "这些数字描述的是本工作台的处理过程，不是市场表现或商业结果。",
         }
@@ -1372,6 +1402,24 @@ class Handler(BaseHTTPRequestHandler):
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
             self.record_quote(quote_match.group(1), body)
+            return
+        rfq_match = re.fullmatch(r"/api/rfqs/([\w-]+)", path)
+        if rfq_match:
+            def update_rfq(data):
+                rfq = next((item for item in data.get("rfqs", []) if item.get("id") == rfq_match.group(1)), None)
+                if rfq is None:
+                    return None
+                if body.get("sent"):
+                    rfq["sentAt"] = utc_now()
+                    if rfq.get("status") == "待发送":
+                        rfq["status"] = "回收中" if rfq.get("quotes") else "已发送"
+                if body.get("dueDate"):
+                    rfq["dueDate"] = str(body.get("dueDate"))[:10]
+                rfq["updatedAt"] = utc_now()
+                return rfq
+
+            result = STORE.update(update_rfq)
+            self.send_json(200 if result else 404, result or {"error": "没有找到这个询价单。"})
             return
         if path == "/api/profile":
             allowed = set(DEFAULT_PROFILE)
