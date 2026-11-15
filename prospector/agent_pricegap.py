@@ -611,13 +611,51 @@ def _fees_for(platform_id: str, assumptions: dict) -> tuple[dict, list[str]]:
     return merged, missing
 
 
-def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str) -> dict:
-    """Per selling platform: what a unit would earn on the cheapest source.
+def _purchase_scenarios(rows_in_group: list[dict]) -> list[dict]:
+    """Three honest purchase-price bases for the same configuration.
 
-    The purchase price is the lowest visible price of the same configuration
-    across all platforms.  Every fee has to come from the operator; when a
-    fee is missing the row says so instead of assuming zero.  Fees may differ
-    per platform, so a platform can override the default assumption.
+    The cheapest visible price, the cheapest price without promotional
+    wording, and the median of the platform minima.  A business case built on
+    the first number alone is usually a subsidy case.
+    """
+    platform_minima = {}
+    for row in rows_in_group:
+        current = platform_minima.get(row["platformId"])
+        if current is None or row["priceLow"] < current["priceLow"]:
+            platform_minima[row["platformId"]] = row
+    if not platform_minima:
+        return []
+    values = sorted(row["priceLow"] for row in platform_minima.values())
+    median = statistics.median(values)
+    non_promo = [row["priceLow"] for row in platform_minima.values() if not row.get("promoSignals")]
+    scenarios = [{
+        "key": "lowest_visible",
+        "label": "最低可见价",
+        "purchasePrice": values[0],
+        "note": "各平台同配置最低可见价，可能来自补贴或清仓。",
+    }]
+    if non_promo:
+        scenarios.append({
+            "key": "lowest_regular",
+            "label": "去除促销后的最低价",
+            "purchasePrice": min(non_promo),
+            "note": "只用没有促销措辞的页面，更接近可持续拿货价。",
+        })
+    scenarios.append({
+        "key": "median",
+        "label": "同配置中位价",
+        "purchasePrice": round(median, 2),
+        "note": "各平台最低价的中位数，作为保守基准。",
+    })
+    return scenarios
+
+
+def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str) -> dict:
+    """Per selling platform: what a unit would earn on several purchase bases.
+
+    Every fee has to come from the operator; when a fee is missing the row
+    says so instead of assuming zero.  Fees may differ per platform, so a
+    platform can override the default assumption.
     """
     rows = []
     incomplete = []
@@ -629,6 +667,7 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
         if len(rows_in_group) < 2:
             continue
         purchase_row = min(rows_in_group, key=lambda row: row["priceLow"])
+        scenarios = _purchase_scenarios(rows_in_group)
         for platform_id in {row["platformId"] for row in rows_in_group}:
             platform_rows = [row for row in rows_in_group if row["platformId"] == platform_id]
             sell_row = min(platform_rows, key=lambda row: row["priceLow"])
@@ -649,25 +688,33 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
                 "missingFields": missing,
                 "contributionProfit": None,
                 "contributionMargin": None,
+                "scenarios": [],
             }
-            if not missing:
-                commission = sell_row["priceLow"] * float(fees["referralRate"])
-                returns = sell_row["priceLow"] * float(fees["returnReserveRate"])
-                ad_cost = float(fees["adCost"])
-                fulfillment = float(fees["fulfillmentCost"])
-                contribution = sell_row["priceLow"] - purchase_row["priceLow"] - commission - ad_cost - fulfillment - returns
-                row.update({
-                    "costs": {
-                        "采购成本": purchase_row["priceLow"],
-                        "平台佣金": round(commission, 2),
-                        "广告": round(ad_cost, 2),
-                        "履约/运费": round(fulfillment, 2),
-                        "退货预留": round(returns, 2),
-                    },
-                    "contributionProfit": round(contribution, 2),
-                    "contributionMargin": round(contribution / sell_row["priceLow"], 4) if sell_row["priceLow"] else 0.0,
-                })
-            else:
+            for scenario in scenarios:
+                entry = {
+                    "key": scenario["key"],
+                    "label": scenario["label"],
+                    "purchasePrice": scenario["purchasePrice"],
+                    "note": scenario["note"],
+                    "grossGap": round(sell_row["priceLow"] - scenario["purchasePrice"], 2),
+                    "missingFields": list(missing),
+                    "contributionProfit": None,
+                    "contributionMargin": None,
+                }
+                if not missing:
+                    commission = sell_row["priceLow"] * float(fees["referralRate"])
+                    returns = sell_row["priceLow"] * float(fees["returnReserveRate"])
+                    ad_cost = float(fees["adCost"])
+                    fulfillment = float(fees["fulfillmentCost"])
+                    contribution = sell_row["priceLow"] - scenario["purchasePrice"] - commission - ad_cost - fulfillment - returns
+                    entry["contributionProfit"] = round(contribution, 2)
+                    entry["contributionMargin"] = round(contribution / sell_row["priceLow"], 4) if sell_row["priceLow"] else 0.0
+                row["scenarios"].append(entry)
+            primary = next((item for item in row["scenarios"] if item["key"] == "lowest_visible"), None)
+            if primary and primary["contributionProfit"] is not None:
+                row["contributionProfit"] = primary["contributionProfit"]
+                row["contributionMargin"] = primary["contributionMargin"]
+            if missing:
                 incomplete.extend(missing)
             rows.append(row)
     rows.sort(key=lambda item: item.get("contributionProfit") if item.get("contributionProfit") is not None else item["grossGap"], reverse=True)
@@ -676,7 +723,8 @@ def compute_platform_profit(groups: list[dict], assumptions: dict, currency: str
         "missingFields": list(dict.fromkeys(incomplete)),
         "complete": not incomplete,
         "note": (
-            "每行假设在最低价平台按可见价拿货、在该平台卖出；费用来自经营画像里的比价假设（可按平台单独设置），未填时不给利润。"
+            "每行按三种采购价基准计算：最低可见价、去促销后的最低价、同配置中位价；"
+            "费用来自经营画像里的比价假设（可按平台单独设置），未填时不给利润。"
         ),
     }
 

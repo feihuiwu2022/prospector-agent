@@ -286,6 +286,22 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertTrue(merged[0]["done"])
         self.assertEqual(merged[0]["item"], "确认起订量与阶梯价")
 
+    def test_three_purchase_price_scenarios_are_reported(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        computed = pricegap.compute_platform_profit(
+            result["groups"],
+            {"referralRate": 0.05, "adCost": 20, "fulfillmentCost": 15, "returnReserveRate": 0.02},
+            "CNY",
+        )
+        row = next(item for item in computed["rows"] if item["platformId"] == "jd")
+        keys = [scenario["key"] for scenario in row["scenarios"]]
+        self.assertIn("lowest_visible", keys)
+        self.assertIn("median", keys)
+        # A higher purchase basis never yields a higher profit.
+        by_price = sorted(row["scenarios"], key=lambda item: item["purchasePrice"])
+        profits = [scenario["contributionProfit"] for scenario in by_price]
+        self.assertEqual(profits, sorted(profits, reverse=True))
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

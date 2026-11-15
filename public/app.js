@@ -301,10 +301,12 @@ function priceGapMarkdown(run) {
     lines.push("");
     lines.push("## 每家平台的单件贡献利润");
     lines.push("");
-    lines.push("| 卖出平台 | 采购价 | 本平台报价 | 毛差价 | 贡献利润 |");
-    lines.push("|---|---:|---:|---:|---:|");
+    lines.push("| 卖出平台 | 本平台报价 | 采购价基准 | 采购价 | 毛差价 | 贡献利润 |");
+    lines.push("|---|---:|---|---:|---:|---:|");
     for (const row of profit.rows) {
-      lines.push(`| ${row.platform} | ${money(row.purchasePrice)}（${row.purchasePlatform}） | ${money(row.sellPrice)} | ${money(row.grossGap)} | ${row.contributionProfit == null ? "待补费用" : `${money(row.contributionProfit)}（${(Number(row.contributionMargin || 0) * 100).toFixed(1)}%）`} |`);
+      for (const scenario of row.scenarios || []) {
+        lines.push(`| ${row.platform} | ${money(row.sellPrice)} | ${scenario.label} | ${money(scenario.purchasePrice)} | ${money(scenario.grossGap)} | ${scenario.contributionProfit == null ? "待补费用" : `${money(scenario.contributionProfit)}（${(Number(scenario.contributionMargin || 0) * 100).toFixed(1)}%）`} |`);
+      }
     }
   }
   const history = report.historySummary || {};
@@ -389,18 +391,22 @@ function renderPriceHistory(history) {
 }
 
 function renderPlatformProfit(profit) {
-  const rows = (profit.rows || []).map((row) => `<tr>
-    <td><b>${esc(row.platform)}</b><small>${esc(row.config || "")}</small>${row.promo ? "<small class=\"promo-tag\">疑似促销价</small>" : ""}</td>
-    <td>${Number(row.purchasePrice).toLocaleString("zh-CN")} <small>${esc(row.purchasePlatform || "")}</small></td>
-    <td>${Number(row.sellPrice).toLocaleString("zh-CN")}</td>
-    <td>${Number(row.grossGap).toLocaleString("zh-CN")}</td>
-    <td>${row.contributionProfit == null ? `<span class="status-pill wait">待补费用</span>` : `${Number(row.contributionProfit).toLocaleString("zh-CN")} ${esc(row.currency || "")}<small>${(Number(row.contributionMargin || 0) * 100).toFixed(1)}%</small>`}</td>
-  </tr>`).join("");
+  const rows = (profit.rows || []).flatMap((row) => {
+    const scenarios = row.scenarios || [];
+    if (!scenarios.length) return [];
+    return scenarios.map((scenario, index) => `<tr>
+      <td>${index === 0 ? `<b>${esc(row.platform)}</b><small>${esc(row.config || "")}</small>${row.promo ? "<small class=\"promo-tag\">疑似促销价</small>" : ""}` : ""}</td>
+      <td>${index === 0 ? `${Number(row.sellPrice).toLocaleString("zh-CN")} ${esc(row.currency || "")}` : ""}</td>
+      <td>${esc(scenario.label)}<small>采购 ${Number(scenario.purchasePrice).toLocaleString("zh-CN")}</small></td>
+      <td>${Number(scenario.grossGap).toLocaleString("zh-CN")}</td>
+      <td>${scenario.contributionProfit == null ? `<span class="status-pill wait">待补费用</span>` : `${Number(scenario.contributionProfit).toLocaleString("zh-CN")} ${esc(row.currency || "")}<small>${(Number(scenario.contributionMargin || 0) * 100).toFixed(1)}%</small>`}</td>
+    </tr>`);
+  }).join("");
   if (!rows) return "";
   const missing = (profit.missingFields || []).length
     ? `<div class="inline-alert">还缺比价假设：${profit.missingFields.join("、")}。补齐后这里会给出每家平台的单件贡献利润。</div>`
     : "";
-  return `<div class="report-list"><b>每家平台的单件贡献利润</b>${missing}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>卖出平台</th><th>采购价（最低价平台）</th><th>本平台报价</th><th>毛差价</th><th>贡献利润</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">${esc(profit.note || "")}</small></div>`;
+  return `<div class="report-list"><b>每家平台的单件贡献利润（三种采购价基准）</b>${missing}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>卖出平台</th><th>本平台报价</th><th>采购价基准</th><th>毛差价</th><th>贡献利润</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">${esc(profit.note || "")}</small></div>`;
 }
 
 function renderPriceAlerts(alerts) {
@@ -651,7 +657,10 @@ function renderTasks(candidate) {
   const providerMessage = state.llmProvider?.configured && state.webSearch?.configured
     ? `已连接 ${esc(state.llmProvider.provider)} 与公开网页搜索。`
     : "检查 MiniMax 模型、Web Search 和本机 Pi Agent 配置。";
-  return `<div class="detail-grid"><div><section class="panel"><div class="panel-head"><h3>专业 Agent 任务</h3><small>主控 Agent 自动拆解与汇总</small></div><div class="task-list">${candidate.tasks.map(renderTaskRow).join("")}</div></section></div><aside><section class="panel"><div class="panel-head"><h3>Agent 工作边界</h3></div><p style="color:#79847b;font-size:9px;line-height:1.7;margin:0">${providerMessage} Agent 先自动搜索公开网页并整理来源，任务按钮可基于候选资料补充专项分析。搜索摘要不是完整商品数据；平台 API、正式报价和真实交易结果仍需对应授权或订单数据。模型输出均为待审分析，不会自动下单。</p></section><section class="panel"><div class="panel-head"><h3>证据要求</h3></div><p style="color:#79847b;font-size:9px;line-height:1.7;margin:0">每个候选保留来源 URL、搜索式和摘要。商品规格、价格、销量、MOQ、交期和利润要在对应平台页面或正式报价中复核。</p><button class="button-secondary" style="margin-top:12px" data-action="tab" data-tab="evidence">查看来源</button></section></aside></div>`;
+  const checklistBlock = (candidate.purchaseChecklist || []).length
+    ? `<section class="panel"><div class="panel-head"><h3>人工待办（采购）</h3><small>勾选后同步推进六步流程</small></div>${renderPurchaseChecklist(candidate)}</section>`
+    : "";
+  return `<div class="detail-grid"><div><section class="panel"><div class="panel-head"><h3>专业 Agent 任务</h3><small>主控 Agent 自动拆解与汇总</small></div><div class="task-list">${candidate.tasks.map(renderTaskRow).join("")}</div></section>${checklistBlock}</div><aside><section class="panel"><div class="panel-head"><h3>Agent 工作边界</h3></div><p style="color:#79847b;font-size:9px;line-height:1.7;margin:0">${providerMessage} Agent 先自动搜索公开网页并整理来源，任务按钮可基于候选资料补充专项分析。搜索摘要不是完整商品数据；平台 API、正式报价和真实交易结果仍需对应授权或订单数据。模型输出均为待审分析，不会自动下单。</p></section><section class="panel"><div class="panel-head"><h3>证据要求</h3></div><p style="color:#79847b;font-size:9px;line-height:1.7;margin:0">每个候选保留来源 URL、搜索式和摘要。商品规格、价格、销量、MOQ、交期和利润要在对应平台页面或正式报价中复核。</p><button class="button-secondary" style="margin-top:12px" data-action="tab" data-tab="evidence">查看来源</button></section></aside></div>`;
 }
 
 function evidenceForm(candidate, selectedDimension = "demand") {
