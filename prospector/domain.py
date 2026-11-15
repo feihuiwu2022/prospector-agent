@@ -163,6 +163,45 @@ UNIFIED_PROFIT_FIELDS = (
 CROSS_CURRENCY_FIELDS = ("fxRate", "inboundCost", "dutyTaxCost")
 
 
+BATCH_FIELDS = ("batchQty", "cashCycleDays")
+
+
+def calculate_batch_plan(assumptions: dict, profit: dict) -> dict:
+    """First-batch cash and turnover, derived from the profit scenario.
+
+    No sales forecast is invented: the operator states how many units the
+    first batch holds and over how many days the cash should come back.
+    """
+    missing = [key for key in BATCH_FIELDS if assumptions.get(key) in (None, "")]
+    if missing:
+        return {"complete": False, "missingFields": missing}
+    try:
+        quantity = float(assumptions["batchQty"])
+        cycle_days = float(assumptions["cashCycleDays"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("首批数量与回本周期必须是有效数字。") from exc
+    if quantity <= 0 or cycle_days <= 0:
+        return {"complete": False, "missingFields": missing}
+    purchase_in_selling_currency = profit.get("purchasePriceInSellingCurrency")
+    if purchase_in_selling_currency is None:
+        purchase_in_selling_currency = float(assumptions.get("purchasePrice", 0) or 0)
+    cash_used = round(purchase_in_selling_currency * quantity, 2)
+    units_per_day = round(quantity / cycle_days, 3)
+    contribution = profit.get("contributionProfit")
+    daily_contribution = round(units_per_day * contribution, 2) if contribution is not None else None
+    return {
+        "complete": True,
+        "currency": profit.get("currency", ""),
+        "batchQty": quantity,
+        "cashCycleDays": cycle_days,
+        "cashUsed": cash_used,
+        "unitsPerDay": units_per_day,
+        "dailyContribution": daily_contribution,
+        "monthlyContribution": round(daily_contribution * 30, 2) if daily_contribution is not None else None,
+        "note": "回本周期与首批数量由你设定；系统不预测销量速度。",
+    }
+
+
 def calculate_profit(assumptions: dict) -> dict:
     """Pick the profit model that matches the recorded assumptions.
 

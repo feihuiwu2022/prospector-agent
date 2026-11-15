@@ -577,6 +577,11 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderCandidateScenarios(candidate) {
+  const rows = candidate.priceScenarios.map((scenario) => `<tr><td>${esc(scenario.label)}</td><td>${Number(scenario.purchasePrice).toLocaleString("zh-CN")}</td><td>${Number(scenario.grossGap).toLocaleString("zh-CN")}</td><td>${scenario.contributionProfit == null ? `<span class="status-pill wait">待补费用</span>` : `${Number(scenario.contributionProfit).toLocaleString("zh-CN")}`}</td><td>${esc(scenario.note || "")}</td></tr>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>三档采购价基准</h3><small>同一配置，不同拿货价下的单件贡献利润</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>采购价基准</th><th>采购价</th><th>毛差价</th><th>贡献利润</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 function renderPurchaseChecklist(candidate) {
   const items = candidate.purchaseChecklist || [];
   const rows = items.map((item) => {
@@ -625,6 +630,7 @@ function renderOverview(candidate) {
       <div>
         <section class="panel"><div class="panel-head"><div><h3>Agent 选品判断</h3><small>${esc(candidate.strategyTitle || "指定商品研究")}${candidate.agentDiscovery?.confidence ? ` · 信号置信度 ${esc(candidate.agentDiscovery.confidence)}` : ""}</small></div><span class="status-pill">${statusLabel(candidate.status)}</span></div><div class="hypothesis-box">${esc(statusNote)}</div>${research ? `<div class="agent-final-review"><b>Agent 初筛：${({ keep: "进入人工审核", hold: "补证后审核", reject: "暂缓" })[research.recommendation] || "待审核"}</b><p>${esc(research.recommendationReason)}</p></div>` : ""}<div style="display:flex;gap:7px;margin-top:11px"><button class="button-secondary" data-action="tab" data-tab="evidence">查看来源证据</button><button class="button-quiet" data-action="tab" data-tab="tasks">查看 Agent 任务 →</button></div></section>
         ${candidate.priceGap ? renderPriceGapContext(candidate) : ""}
+        ${candidate.priceScenarios?.length ? renderCandidateScenarios(candidate) : ""}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
@@ -696,6 +702,8 @@ const unifiedProfitFields = [
   ["fulfillmentCost", "履约与运费", "销售币种 / 件", ""],
   ["returnReserveRate", "退货/损耗预留", "%", "percent"],
   ["otherCost", "其他单件成本", "销售币种 / 件", ""],
+  ["batchQty", "首批备货数量", "件", ""],
+  ["cashCycleDays", "现金回本周期", "天", ""],
 ];
 
 const percentProfitFields = new Set(["referralRate", "returnReserveRate"]);
@@ -720,8 +728,19 @@ function renderProfit(candidate) {
     <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存并计算</button></div></div>
   </form></section></div><aside>
     <section class="panel"><div class="panel-head"><h3>利润情景</h3><small>${result.currency || fallbackCurrency} / 单件</small></div>${result.complete ? `<div class="profit-result"><div class="profit-metric"><span>贡献利润</span><b class="${result.contributionProfit < 0 ? "negative" : ""}">${money(result.contributionProfit)}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${result.contributionMargin < 0 ? "negative" : ""}">${(result.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>${money(result.breakEvenAdCost)}</b></div></div><div class="profit-costs">${Object.entries(result.costs).map(([key, value]) => `<div class="cost-row"><span>${esc(key)}</span><b>${money(value)}</b></div>`).join("")}</div>` : `<div class="inline-alert">补齐必要输入后展示计算结果；${result.missingFields?.length ? `当前缺：${result.missingFields.join("、")}。` : "关税和其他成本请核实或明确填入。"}</div>`}</section>
+    ${renderBatchPlan(candidate)}
     <section class="panel"><div class="panel-head"><h3>计算公式</h3></div><p style="font-size:8px;line-height:1.7;color:#7f8981;margin:0">售价 − 采购成本（跨币种时按手动汇率换算）− 头程 − 关税及进口税费 − 平台佣金 − 广告 − 履约与运费 − 退货预留 − 其他成本。</p><p style="font-size:8px;line-height:1.7;color:#9aa39b;margin:8px 0 0">单件贡献利润情景；未录入的固定费用、汇兑波动和税务处理仍需人工复核。</p></section>
   </aside></div>`;
+}
+
+function renderBatchPlan(candidate) {
+  const plan = candidate.batchPlan || {};
+  const profit = candidate.profit || {};
+  if (!plan.complete) {
+    return `<section class="panel"><div class="panel-head"><h3>首批与周转</h3><small>由你设定，不预测销量</small></div><div class="inline-alert">填入首批数量与现金回本周期，这里会算出首批占用资金、每日需售出件数与每日/每月贡献利润。</div></section>`;
+  }
+  const money = (value) => (value == null ? "—" : `${Number(value).toLocaleString("zh-CN")} ${plan.currency || ""}`);
+  return `<section class="panel"><div class="panel-head"><h3>首批与周转</h3><small>由你设定，不预测销量</small></div><div class="profit-result"><div class="profit-metric"><span>首批占用资金</span><b>${money(plan.cashUsed)}</b></div><div class="profit-metric"><span>每日需售出</span><b>${plan.unitsPerDay} 件</b></div><div class="profit-metric"><span>每日贡献利润</span><b class="${(plan.dailyContribution || 0) < 0 ? "negative" : ""}">${money(plan.dailyContribution)}</b></div></div><div class="profit-costs"><div class="cost-row"><span>30 天贡献利润</span><b>${money(plan.monthlyContribution)}</b></div></div><p style="font-size:8px;color:#929b94;line-height:1.6;margin:10px 0 0">${esc(plan.note || "")} 首批 ${plan.batchQty} 件 / ${plan.cashCycleDays} 天回本。</p></section>`;
 }
 
 function reportMarkdown(candidate) {
@@ -786,6 +805,7 @@ function renderProfile() {
       <div class="field"><label>风险偏好</label><select name="riskTolerance"><option value="" ${!profile.riskTolerance ? "selected" : ""}>未设置</option><option ${profile.riskTolerance === "低风险" ? "selected" : ""}>低风险</option><option ${profile.riskTolerance === "中等风险" ? "selected" : ""}>中等风险</option><option ${profile.riskTolerance === "较高风险" ? "selected" : ""}>较高风险</option></select></div>
       <div class="field"><label>库存承受度</label><select name="inventoryTolerance"><option value="" ${!profile.inventoryTolerance ? "selected" : ""}>未设置</option><option ${profile.inventoryTolerance === "不囤货" ? "selected" : ""}>不囤货</option><option ${profile.inventoryTolerance === "允许少量囤货" ? "selected" : ""}>允许少量囤货</option><option ${profile.inventoryTolerance === "可批量备货" ? "selected" : ""}>可批量备货</option></select></div>
       <div class="field"><label>供应链能力</label><input name="sourcingCapabilities" value="${esc(profile.sourcingCapabilities || "")}" placeholder="工厂、验货、定制等" /></div>
+      <div class="field full"><label class="check-option" style="display:inline-flex;gap:7px;align-items:flex-start"><input type="checkbox" name="avoidRejected" ${profile.avoidRejected ? "checked" : ""} /><span><b>把淘汰理由回喂给 Agent</b><small>开启后，下一轮自动选品会带上你过去淘汰商品时写下的原因，作为“不要再来这类”的提示；理由原文不改写。</small></span></label></div>
       <div class="field full"><label>比价假设（把毛差价换算成单件贡献利润）</label>
         <div class="form-grid">
           <div class="field"><label>平台佣金率（%）</label><input name="priceGapReferralRate" type="number" min="0" step="0.1" value="${esc(gapCosts.referralRate === "" ? "" : Number(gapCosts.referralRate) * 100)}" placeholder="例如 5" /></div>
@@ -1191,6 +1211,7 @@ document.addEventListener("submit", async (event) => {
     if (form.id === "profile-form") {
       const profile = Object.fromEntries(data.entries());
       profile.budgetCny = profile.budgetCny === "" ? null : Number(profile.budgetCny);
+      profile.avoidRejected = data.get("avoidRejected") === "on";
       profile.sourcingPlatforms = data.getAll("sourcingPlatforms").map(String);
       const gapAssumptions = {};
       const referral = String(data.get("priceGapReferralRate") || "").trim();

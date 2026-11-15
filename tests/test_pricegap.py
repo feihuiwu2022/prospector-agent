@@ -302,6 +302,43 @@ class PriceGapScanTest(unittest.TestCase):
         profits = [scenario["contributionProfit"] for scenario in by_price]
         self.assertEqual(profits, sorted(profits, reverse=True))
 
+    def test_batch_plan_needs_quantity_and_cycle(self) -> None:
+        from prospector.domain import calculate_batch_plan, calculate_profit
+
+        assumptions = {
+            "sellingPrice": 2099,
+            "sellingCurrency": "CNY",
+            "purchasePrice": 1899,
+            "purchaseCurrency": "CNY",
+            "referralRate": 0.05,
+            "adCost": 20,
+            "fulfillmentCost": 15,
+            "returnReserveRate": 0.02,
+        }
+        profit = calculate_profit(assumptions)
+        incomplete = calculate_batch_plan(assumptions, profit)
+        self.assertFalse(incomplete["complete"])
+        plan = calculate_batch_plan({**assumptions, "batchQty": 60, "cashCycleDays": 30}, profit)
+        self.assertTrue(plan["complete"])
+        self.assertEqual(plan["cashUsed"], 113940.0)
+        self.assertEqual(plan["unitsPerDay"], 2.0)
+        self.assertAlmostEqual(plan["dailyContribution"], round(2 * profit["contributionProfit"], 2), places=2)
+
+    def test_rejected_reasons_become_avoid_constraints(self) -> None:
+        from prospector.agent_discovery import _rejected_constraints
+
+        data = {
+            "candidates": [
+                {"name": "折叠晾衣架", "humanReview": {"decision": "reject", "reason": "同质化严重，没有价格优势"}},
+                {"name": "宠物饮水器", "humanReview": {"decision": "continue", "reason": "补来源"}},
+                {"name": "无理由候选", "humanReview": {"decision": "reject", "reason": ""}},
+            ]
+        }
+        constraints = _rejected_constraints(data)
+        self.assertEqual(len(constraints), 1)
+        self.assertIn("折叠晾衣架", constraints[0])
+        self.assertIn("同质化严重", constraints[0])
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

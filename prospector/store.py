@@ -18,6 +18,9 @@ DEFAULT_PROFILE = {
     "inventoryTolerance": "允许少量囤货",
     "riskTolerance": "中等风险",
     "sourcingCapabilities": "",
+    # When enabled, the operator's rejection reasons are fed back to the
+    # agent as "do not propose this again" hints.
+    "avoidRejected": False,
     # Cost assumptions used to turn a visible price gap into a contribution
     # estimate.  Empty values mean "not decided yet", never zero.
     # ``byPlatform`` holds per-platform overrides (platform id -> fees).

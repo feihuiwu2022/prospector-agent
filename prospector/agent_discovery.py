@@ -30,6 +30,8 @@ DISCOVERY_SYSTEM = """你负责从用户授权的公开网页搜索结果中，�
 
 如果输入包含 userBrief，把它作为用户研究范围或偏好执行；它本身不是市场证据。指定商品时围绕该商品核验，也可在有充分支持时提出相关替代品；指定人群/类目/价格带时由你提出具体商品候选。
 
+如果输入包含 avoidConstraints，那是经营者过去淘汰商品时写下的原因。只把它们当作“不要再提这类商品”的提示，不要据此编造市场事实，也不要为了避开它们而虚构结论；仍然只输出有来源支持的具体商品。
+
 只返回有效 JSON，不要 Markdown 代码围栏或 JSON 之外的解释。格式：{"summary":"简短扫描摘要","candidates":[{"name":"具体商品名","category":"类目","buyer":"目标顾客","productIdea":"商品和可做差异化","strategyFit":"为何符合该策略","signal":"材料支持的需求/市场信号摘要","sourceRefs":["S1","S3"],"confidence":"low|medium|high","risks":["待核实事项"]}]}。"high" 仅用于至少两类独立来源支持且线索具体的情况；一般搜索摘要通常为 low 或 medium。"""
 
 VALIDATION_SYSTEM = """你是跨境商品研究 Agent。根据给定候选和按商品名自动检索的搜索结果，形成 {market} 市场、{source_country} 货源与利润准备度的初步核验，供经营者最后审核。
@@ -236,7 +238,25 @@ def _progress(callback, stage: str, message: str, value: int) -> None:
         callback(stage, message, value)
 
 
-def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: str = "", mode: str = "automatic_selection") -> dict:
+def _rejected_constraints(data: dict, limit: int = 12) -> list[str]:
+    """Reasons from rejected candidates, used as avoid-constraints.
+
+    Only the operator's own words are reused; the system never rewrites them
+    into new claims.
+    """
+    rows = []
+    for candidate in data.get("candidates", []):
+        review = candidate.get("humanReview") or {}
+        if review.get("decision") != "reject":
+            continue
+        reason = _as_text(review.get("reason"), 240)
+        if not reason:
+            continue
+        rows.append(f"{_as_text(candidate.get('name'), 120)}：{reason}")
+    return rows[-limit:]
+
+
+def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: str = "", mode: str = "automatic_selection", avoid_constraints: list[str] | None = None) -> dict:
     strategy = STRATEGIES.get(strategy_id)
     if strategy_id == "manual_selection":
         strategy = {
@@ -266,6 +286,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
         "market": market,
         "sourcingCountry": sourcing_country,
         "userBrief": _as_text(brief, 1200),
+        "avoidConstraints": list(avoid_constraints or []),
         "searchResults": seed_sources,
     }
     seed_text, model = complete(

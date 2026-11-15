@@ -16,7 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from prospector.agents import build_tasks, now_iso, refresh_task_statuses
-from prospector.agent_discovery import run_agent_discovery
+from prospector.agent_discovery import _rejected_constraints, run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
 from prospector.agent_pricegap import (
     advance_candidate_workflow,
@@ -33,6 +33,7 @@ from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
+    calculate_batch_plan,
     calculate_profit,
     calculate_scores,
     confidence_for,
@@ -89,6 +90,7 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["scoreStatus"] = {"complete": score_result["complete"], "missingScores": score_result["missingScores"]}
     result["confidence"] = confidence_for(result)
     result["profit"] = calculate_profit(result.get("assumptions", {}))
+    result["batchPlan"] = calculate_batch_plan(result.get("assumptions", {}), result["profit"])
     result["resourceFit"] = resource_fit(result, profile)
     return result
 
@@ -559,12 +561,16 @@ class Handler(BaseHTTPRequestHandler):
                 summary = result.get("summary", "竞品扫描完成。")
             else:
                 discovery_strategy = strategy_id if mode == "automatic_selection" else "manual_selection"
+                avoid: list[str] = []
+                if profile.get("avoidRejected"):
+                    avoid = _rejected_constraints(STORE.read())
                 result = run_agent_discovery(
                     discovery_strategy,
                     profile,
                     update_progress,
                     brief=prompt,
                     mode=mode,
+                    avoid_constraints=avoid,
                 )
                 candidates = result.get("candidates", [])
                 final_status = result.get("status", "no_candidates")
@@ -678,7 +684,8 @@ class Handler(BaseHTTPRequestHandler):
             STORE.update(update)
 
         try:
-            result = run_agent_discovery(strategy_id, profile, update_progress)
+            avoid = _rejected_constraints(STORE.read()) if profile.get("avoidRejected") else []
+            result = run_agent_discovery(strategy_id, profile, update_progress, avoid_constraints=avoid)
 
             def finish(data):
                 run = next((item for item in data.get("discoveryRuns", []) if item.get("id") == run_id), None)

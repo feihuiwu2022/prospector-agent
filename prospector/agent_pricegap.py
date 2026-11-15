@@ -915,12 +915,14 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "kind": "same_market",
             "config": item["config"],
             "sourcePlatform": item["sourcePlatform"],
+            "sourcePlatformId": item["sourcePlatformId"],
             "sourcePrice": item["sourcePrice"],
             "sourceCurrency": currency,
             "sourceUrl": item.get("sourceUrl", ""),
             "sourceTitle": item.get("sourceTitle", ""),
             "sourceColor": item.get("sourceColor", ""),
             "targetPlatform": item["targetPlatform"],
+            "targetPlatformId": item["targetPlatformId"],
             "targetPrice": item["targetPrice"],
             "targetCurrency": currency,
             "targetUrl": item.get("targetUrl", ""),
@@ -936,12 +938,14 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "kind": "cross_market",
             "config": pair["config"],
             "sourcePlatform": pair["sourcePlatform"],
+            "sourcePlatformId": pair.get("sourcePlatformId", ""),
             "sourcePrice": pair["sourcePrice"],
             "sourceCurrency": pair["sourceCurrency"],
             "sourceUrl": pair.get("sourceUrl", ""),
             "sourceTitle": pair.get("sourceTitle", ""),
             "sourceColor": pair.get("sourceColor", ""),
             "targetPlatform": pair["targetPlatform"],
+            "targetPlatformId": pair.get("targetPlatformId", ""),
             "targetPrice": pair["targetPrice"],
             "targetCurrency": pair["targetCurrency"],
             "targetUrl": pair.get("targetUrl", ""),
@@ -964,6 +968,15 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 spec["gapContext"] = f"本次差价 {current} 明显低于这对平台的历史中位差价 {median}，更可能是限时补贴或异常低价。"
             elif ratio > 1.3:
                 spec["gapContext"] = f"本次差价 {current} 高于这对平台的历史中位差价 {median}，值得复核是否同款或页面口径不同。"
+
+    assumptions = (profile.get("priceGapAssumptions") or {})
+    try:
+        platform_profit = compute_platform_profit(result.get("groups", []), assumptions, currency)
+    except (TypeError, ValueError):
+        platform_profit = {"rows": []}
+    scenarios_by_key = {
+        (row["config"], row["platformId"]): row for row in platform_profit.get("rows", [])
+    }
 
     stages = {stage["id"]: stage for stage in WORKFLOW_STAGES}
     candidates = []
@@ -1030,6 +1043,7 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             },
             "evidence": evidence,
             "purchaseChecklist": build_purchase_checklist(product, spec),
+            "priceScenarios": (scenarios_by_key.get((spec["config"], spec.get("targetPlatformId", ""))) or {}).get("scenarios", []),
             "priceGap": {
                 "sourcePlatform": spec["sourcePlatform"],
                 "sourceTitle": spec["sourceTitle"] or f"{product} {spec['config']}",
