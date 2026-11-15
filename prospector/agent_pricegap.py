@@ -133,6 +133,15 @@ def _config_key(ram_gb, storage_gb) -> str:
     return ""
 
 
+def _seller_of(url: str) -> str:
+    """Host of the page, used to tell stores apart on the same platform."""
+    match = re.search(r"https?://([^/]+)", str(url or ""), flags=re.IGNORECASE)
+    if not match:
+        return ""
+    host = match.group(1).lower()
+    return host[4:] if host.startswith("www.") else host
+
+
 def _platform_rows(product: str, platform: dict, results: list[dict], currency: str) -> list[dict]:
     rows = []
     for source in results:
@@ -162,6 +171,7 @@ def _platform_rows(product: str, platform: dict, results: list[dict], currency: 
             "color": _color(text),
             "modelConfirmed": True,
             "secondHand": bool(platform.get("second_hand", False)),
+            "seller": _seller_of(source.get("url", "")),
             "sourceRef": source.get("ref", ""),
             "searchQuery": _as_text(source.get("query"), 240),
         })
@@ -224,11 +234,29 @@ def _group_rows(rows: list[dict]) -> list[dict]:
                 item["gapPct"] = 0.0
         gross_gap = round(highest["priceLow"] - lowest["priceLow"], 2) if comparable and lowest and highest else 0.0
         gross_gap_pct = round(gross_gap / lowest["priceLow"], 4) if comparable and lowest and lowest["priceLow"] else 0.0
+        sellers = []
+        for item in items:
+            seller = item.get("seller") or "未识别店铺"
+            existing = next((row for row in sellers if row["seller"] == seller and row["platform"] == item["platform"]), None)
+            if existing:
+                existing["priceLow"] = min(existing["priceLow"], item["priceLow"])
+                existing["listingCount"] += 1
+            else:
+                sellers.append({
+                    "seller": seller,
+                    "platform": item["platform"],
+                    "priceLow": item["priceLow"],
+                    "currency": item["currency"],
+                    "listingCount": 1,
+                    "secondHand": item["secondHand"],
+                })
+        sellers.sort(key=lambda row: row["priceLow"])
         result.append({
             "config": key,
             "comparable": comparable,
             "reasons": reasons,
             "caveats": caveats,
+            "sellers": sellers,
             "rows": sorted(items, key=lambda item: item["priceLow"]),
             "lowestPlatform": lowest["platform"] if lowest else "",
             "highestPlatform": highest["platform"] if highest else "",
@@ -261,10 +289,16 @@ def _opportunities(groups: list[dict], currency: str) -> list[dict]:
             "sourcePlatformId": source["platformId"],
             "sourcePrice": source["priceLow"],
             "sourceUrl": source["url"],
+            "sourceTitle": source["title"],
+            "sourceColor": source.get("color", ""),
+            "sourceSeller": source.get("seller", ""),
             "targetPlatform": target["platform"],
             "targetPlatformId": target["platformId"],
             "targetPrice": target["priceLow"],
             "targetUrl": target["url"],
+            "targetTitle": target["title"],
+            "targetColor": target.get("color", ""),
+            "targetSeller": target.get("seller", ""),
             "grossGap": round(target["priceLow"] - source["priceLow"], 2),
             "grossGapPct": round((target["priceLow"] - source["priceLow"]) / source["priceLow"], 4) if source["priceLow"] else 0.0,
             "observedAt": date.today().isoformat(),
@@ -407,10 +441,14 @@ def run_price_gap_scan(product: str, market: str = "中国", source_country: str
                     "sourcePrice": cheapest["priceLow"],
                     "sourceCurrency": cheapest["currency"],
                     "sourceUrl": cheapest["url"],
+                    "sourceTitle": cheapest["title"],
+                    "sourceColor": cheapest.get("color", ""),
                     "targetPlatform": dearest["platform"],
                     "targetPrice": dearest["priceLow"],
                     "targetCurrency": dearest["currency"],
                     "targetUrl": dearest["url"],
+                    "targetTitle": dearest["title"],
+                    "targetColor": dearest.get("color", ""),
                     "note": "两侧币种不同：需要人工填汇率、头程与关税后才能算贡献利润。",
                 })
         cross_border["pairs"] = pairs
@@ -458,6 +496,56 @@ def run_price_gap_scan(product: str, market: str = "中国", source_country: str
     }
 
 
+PRICE_ALERT_THRESHOLD = 0.05
+
+
+def summarize_price_history(history: list[dict]) -> dict:
+    """Turn raw observations into per-platform series and change alerts.
+
+    An observation is what a public page showed on a date.  A drop is a
+    signal to look again, never a reason to buy.
+    """
+    grouped: dict[tuple, list[dict]] = {}
+    for item in history:
+        key = (item.get("platform", ""), item.get("config", ""))
+        grouped.setdefault(key, []).append(item)
+    series = []
+    alerts = []
+    for (platform, config), items in grouped.items():
+        ordered = sorted(items, key=lambda row: (str(row.get("observedAt", "")), str(row.get("recordedAt", ""))))
+        latest = ordered[-1]
+        previous = ordered[-2] if len(ordered) > 1 else None
+        change_pct = None
+        if previous and previous.get("price") and latest.get("price"):
+            change_pct = round((latest["price"] - previous["price"]) / previous["price"], 4)
+        row = {
+            "platform": platform,
+            "config": config,
+            "latestPrice": latest.get("price"),
+            "latestCurrency": latest.get("currency", ""),
+            "observedAt": latest.get("observedAt", ""),
+            "previousPrice": previous.get("price") if previous else None,
+            "changePct": change_pct,
+            "observations": len(ordered),
+            "prices": [
+                {"price": item.get("price"), "observedAt": item.get("observedAt", ""), "url": item.get("url", "")}
+                for item in ordered[-12:]
+            ],
+        }
+        series.append(row)
+        if change_pct is not None and abs(change_pct) >= PRICE_ALERT_THRESHOLD:
+            alerts.append({
+                **row,
+                "direction": "降价" if change_pct < 0 else "涨价",
+                "note": (
+                    f"{platform} 同配置报价较上次{('下降' if change_pct < 0 else '上升')} "
+                    f"{abs(change_pct) * 100:.1f}%，需要打开页面确认是否为同款、是否伴随补贴或限时活动。"
+                ),
+            })
+    series.sort(key=lambda row: (row["platform"], row["config"]))
+    return {"series": series, "alerts": alerts, "threshold": PRICE_ALERT_THRESHOLD}
+
+
 def build_price_gap_candidates(product: str, result: dict, profile: dict) -> list[dict]:
     """Turn comparable price gaps into reviewable candidates.
 
@@ -478,10 +566,14 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "sourcePrice": item["sourcePrice"],
             "sourceCurrency": currency,
             "sourceUrl": item.get("sourceUrl", ""),
+            "sourceTitle": item.get("sourceTitle", ""),
+            "sourceColor": item.get("sourceColor", ""),
             "targetPlatform": item["targetPlatform"],
             "targetPrice": item["targetPrice"],
             "targetCurrency": currency,
             "targetUrl": item.get("targetUrl", ""),
+            "targetTitle": item.get("targetTitle", ""),
+            "targetColor": item.get("targetColor", ""),
             "gapText": f"同配置毛差价 {item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）",
         })
     cross = (result.get("crossBorder") or {}).get("pairs") or []
@@ -493,10 +585,14 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
             "sourcePrice": pair["sourcePrice"],
             "sourceCurrency": pair["sourceCurrency"],
             "sourceUrl": pair.get("sourceUrl", ""),
+            "sourceTitle": pair.get("sourceTitle", ""),
+            "sourceColor": pair.get("sourceColor", ""),
             "targetPlatform": pair["targetPlatform"],
             "targetPrice": pair["targetPrice"],
             "targetCurrency": pair["targetCurrency"],
             "targetUrl": pair.get("targetUrl", ""),
+            "targetTitle": pair.get("targetTitle", ""),
+            "targetColor": pair.get("targetColor", ""),
             "gapText": "两侧币种不同，需要人工填汇率、头程与关税后才能算贡献利润",
         })
 
@@ -564,6 +660,27 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 "purchaseCurrency": spec["sourceCurrency"],
             },
             "evidence": evidence,
+            "priceGap": {
+                "sourcePlatform": spec["sourcePlatform"],
+                "sourceTitle": spec["sourceTitle"] or f"{product} {spec['config']}",
+                "sourcePrice": spec["sourcePrice"],
+                "sourceCurrency": spec["sourceCurrency"],
+                "sourceUrl": spec["sourceUrl"],
+                "sourceVariant": spec["config"],
+                "sourceColor": spec["sourceColor"],
+                "sourceMarket": str(profile.get("sourcingCountry", "中国"))[:80],
+                "targetPlatform": spec["targetPlatform"],
+                "targetTitle": spec["targetTitle"] or f"{product} {spec['config']}",
+                "targetPrice": spec["targetPrice"],
+                "targetCurrency": spec["targetCurrency"],
+                "targetUrl": spec["targetUrl"],
+                "targetVariant": spec["config"],
+                "targetColor": spec["targetColor"],
+                "targetMarket": market,
+                "brand": product.split(" ")[0] if product else "",
+                "model": product,
+                "observedAt": observed,
+            },
             "scores": {},
             "tasks": build_tasks(candidate_id, "active_research"),
             "agentDiscovery": {
@@ -575,7 +692,11 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                     f"{spec['targetPlatform']} {spec['targetPrice']} {spec['targetCurrency']}"
                 ),
                 "confidence": "low",
-                "risks": ["公开摘要价格未经页面核实", "同配置颜色或套装可能不同", "未包含佣金、广告、履约与退货成本"],
+                "risks": ["公开摘要价格未经页面核实", "同配置颜色或套装可能不同", "未包含佣金、广告、履约与退货成本"]
+                + [
+                    f"{alert['platform']} 同配置报价较上次{'下降' if alert.get('changePct', 0) < 0 else '上升'} {abs(alert.get('changePct', 0)) * 100:.1f}%，需确认是否同款。"
+                    for alert in (result.get("historySummary", {}) or {}).get("alerts", [])[:3]
+                ],
                 "evidenceIds": [row["id"] for row in evidence],
                 "generatedAt": _now_iso(),
                 "model": "price_gap_scan",

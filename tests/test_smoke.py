@@ -143,6 +143,65 @@ class ServerSmokeTest(unittest.TestCase):
         modes = {item["id"] for item in data["modes"]}
         self.assertIn("price_gap", modes)
 
+    def test_price_gap_pair_runs_the_same_spec_check(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "gap-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "OPPO K13s 12G+256G",
+                "category": "其他",
+                "hypothesis": "同配置跨平台差价",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "日本",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {
+                    "sellingPrice": 2099,
+                    "sellingCurrency": "CNY",
+                    "purchasePrice": 32800,
+                    "purchaseCurrency": "JPY",
+                },
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "priceGap": {
+                    "sourcePlatform": "Amazon.co.jp",
+                    "sourceTitle": "OPPO K13s 12GB+256GB",
+                    "sourcePrice": 32800,
+                    "sourceCurrency": "JPY",
+                    "sourceUrl": "https://www.amazon.co.jp/dp/B0TEST",
+                    "sourceVariant": "12G+256G",
+                    "sourceColor": "",
+                    "sourceMarket": "日本",
+                    "targetPlatform": "京东",
+                    "targetTitle": "OPPO K13s 12+256",
+                    "targetPrice": 2099,
+                    "targetCurrency": "CNY",
+                    "targetUrl": "https://item.jd.com/2.html",
+                    "targetVariant": "12G+256G",
+                    "targetColor": "",
+                    "targetMarket": "中国",
+                    "brand": "OPPO",
+                    "model": "OPPO K13s",
+                    "observedAt": "2026-11-15",
+                },
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, payload = _post(f"{self.base}/api/discovery", {"trigger": "price_gap_pair", "candidateId": candidate_id})
+        self.assertEqual(status, 201)
+        self.assertIn(payload["matching"]["status"], {"exact_match", "probable_match"})
+        # The cost inputs are missing, so no profit may be claimed.
+        self.assertIsNone(payload["estimate"])
+        self.assertTrue(payload["estimateError"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

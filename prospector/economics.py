@@ -76,6 +76,70 @@ def estimate_cross_market_profit(source_listing: dict, target_listing: dict, ass
     }
 
 
+CROSS_PAIR_FIELDS = (
+    "fxRate",
+    "fxObservedAt",
+    "inboundCost",
+    "dutyTaxCost",
+    "fulfillmentCost",
+    "referralRate",
+    "adCost",
+    "returnReserveRate",
+    "otherCost",
+)
+
+
+def estimate_currency_pair_profit(source_listing: dict, target_listing: dict, assumptions: dict) -> dict:
+    """Estimate the contribution of one cross-currency pair.
+
+    The exchange rate, inbound cost and duty are never looked up: the caller
+    has to supply them, together with the date the rate was observed.
+    """
+    missing = [key for key in CROSS_PAIR_FIELDS if assumptions.get(key) in (None, "")]
+    if missing:
+        raise ValueError("跨币种价差估算需要显式填写汇率与汇率日期、头程、税费、履约、佣金、广告、退货预留和其他成本。")
+    try:
+        date.fromisoformat(str(assumptions["fxObservedAt"])[:10])
+    except ValueError as exc:
+        raise ValueError("汇率观察日期必须使用 YYYY-MM-DD 格式。") from exc
+
+    source_price = _number(source_listing.get("price"), "采购平台价格", minimum=0)
+    target_price = _number(target_listing.get("price"), "销售平台价格", minimum=0)
+    fx_rate = _number(assumptions.get("fxRate"), "换算汇率", minimum=0)
+    if source_price <= 0 or target_price <= 0 or fx_rate <= 0:
+        raise ValueError("采购价、销售价和汇率必须大于 0。")
+
+    referral_rate = _number(assumptions.get("referralRate"), "平台佣金率", minimum=0)
+    return_rate = _number(assumptions.get("returnReserveRate"), "退货预留率", minimum=0)
+    if referral_rate > 1 or return_rate > 1:
+        raise ValueError("平台佣金率和退货预留率必须在 0 到 1 之间。")
+
+    source_cost = source_price * fx_rate
+    costs = {
+        "采购成本": source_cost,
+        "头程": _number(assumptions.get("inboundCost"), "头程费用", minimum=0),
+        "关税及进口税费": _number(assumptions.get("dutyTaxCost"), "关税及进口税费", minimum=0),
+        "履约费用": _number(assumptions.get("fulfillmentCost"), "履约费用", minimum=0),
+        "平台佣金": target_price * referral_rate,
+        "广告": _number(assumptions.get("adCost"), "广告费用", minimum=0),
+        "退货预留": target_price * return_rate,
+        "其他": _number(assumptions.get("otherCost"), "其他费用", minimum=0),
+    }
+    contribution = target_price - sum(costs.values())
+    return {
+        "currency": str(target_listing.get("currency", "")),
+        "sourceCurrency": str(source_listing.get("currency", "")),
+        "targetCurrency": str(target_listing.get("currency", "")),
+        "sourceCostInTargetCurrency": round(source_cost, 2),
+        "grossPriceGap": round(target_price - source_cost, 2),
+        "estimatedCosts": {key: round(value, 2) for key, value in costs.items()},
+        "estimatedContribution": round(contribution, 2),
+        "estimatedContributionMargin": round(contribution / target_price, 4),
+        "assumptionQuality": "user_supplied_estimate",
+        "fxObservedAt": assumptions.get("fxObservedAt") or None,
+    }
+
+
 def _number(value, label: str, minimum: float) -> float:
     try:
         number = float(value)

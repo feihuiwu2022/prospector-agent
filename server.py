@@ -18,7 +18,7 @@ from uuid import uuid4
 from prospector.agents import build_tasks, now_iso, refresh_task_statuses
 from prospector.agent_discovery import run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
-from prospector.agent_pricegap import build_price_gap_candidates, run_price_gap_scan
+from prospector.agent_pricegap import build_price_gap_candidates, run_price_gap_scan, summarize_price_history
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
@@ -31,7 +31,7 @@ from prospector.domain import (
     confidence_for,
     resource_fit,
 )
-from prospector.economics import estimate_cross_market_profit
+from prospector.economics import estimate_cross_market_profit, estimate_currency_pair_profit
 from prospector.matching import match_listings
 from prospector.llm.minimax import MiniMaxError, provider_status as llm_provider_status
 from prospector.llm.web_search import WebSearchError, search_status as web_search_status
@@ -529,6 +529,7 @@ class Handler(BaseHTTPRequestHandler):
                     progress=update_progress,
                 )
                 result["history"] = self._record_price_observations(prompt, result)
+                result["historySummary"] = summarize_price_history(result["history"])
                 candidates = build_price_gap_candidates(prompt, result, profile)
                 final_status = result.get("status", "needs_manual_validation")
                 summary = result.get("summary", "同品比价完成。")
@@ -780,8 +781,69 @@ class Handler(BaseHTTPRequestHandler):
                 "estimate": estimate,
                 "createdAt": utc_now(),
             }
+        elif trigger == "price_gap_pair":
+            candidate_id = str(body.get("candidateId", "")).strip()
+            data = STORE.read()
+            candidate = find_candidate(data, candidate_id)
+            pairing = (candidate or {}).get("priceGap") or {}
+            if not candidate or not pairing:
+                raise ValueError("这个候选没有可用的比价配对，无法生成价差研究。")
+            source = normalize_listing({
+                "title": pairing.get("sourceTitle", candidate.get("name", "采购商品")),
+                "platform": pairing.get("sourcePlatform", "待确认平台"),
+                "market": pairing.get("sourceMarket", candidate.get("sourcingCountry", "中国")),
+                "price": pairing.get("sourcePrice"),
+                "currency": pairing.get("sourceCurrency", "CNY"),
+                "url": pairing.get("sourceUrl", ""),
+                "observedAt": pairing.get("observedAt", date.today().isoformat()),
+                "brand": pairing.get("brand", ""),
+                "model": pairing.get("model", ""),
+                "variant": pairing.get("sourceVariant", ""),
+                "color": pairing.get("sourceColor", ""),
+                "packCount": pairing.get("packCount", ""),
+                "attributes": {"配置": pairing.get("sourceVariant", "")},
+            }, "source")
+            target = normalize_listing({
+                "title": pairing.get("targetTitle", candidate.get("name", "销售商品")),
+                "platform": pairing.get("targetPlatform", "待确认平台"),
+                "market": pairing.get("targetMarket", candidate.get("market", "中国")),
+                "price": pairing.get("targetPrice"),
+                "currency": pairing.get("targetCurrency", "CNY"),
+                "url": pairing.get("targetUrl", ""),
+                "observedAt": pairing.get("observedAt", date.today().isoformat()),
+                "brand": pairing.get("brand", ""),
+                "model": pairing.get("model", ""),
+                "variant": pairing.get("targetVariant", ""),
+                "color": pairing.get("targetColor", ""),
+                "packCount": pairing.get("packCount", ""),
+                "attributes": {"配置": pairing.get("targetVariant", "")},
+            }, "target")
+            matching = match_listings(source, target)
+            assumptions = candidate.get("assumptions", {})
+            estimate = None
+            estimate_error = ""
+            if matching["status"] in {"exact_match", "probable_match"}:
+                try:
+                    estimate = estimate_currency_pair_profit(source, target, assumptions)
+                except ValueError as exc:
+                    estimate_error = str(exc)
+            run = {
+                "id": str(uuid4()),
+                "trigger": trigger,
+                "title": target["title"],
+                "status": "needs_product_match_review" if matching["status"] not in {"exact_match", "probable_match"} else (
+                    "needs_manual_validation" if estimate else "needs_cost_input"
+                ),
+                "candidateId": candidate_id,
+                "sourceListing": source,
+                "targetListing": target,
+                "matching": matching,
+                "estimate": estimate,
+                "estimateError": estimate_error,
+                "createdAt": utc_now(),
+            }
         else:
-            raise ValueError("发现入口必须是 tiktok_trend 或 cross_market_price_gap。")
+            raise ValueError("发现入口必须是 tiktok_trend、cross_market_price_gap 或 price_gap_pair。")
 
         saved = STORE.update(lambda data: data.setdefault("discoveryRuns", []).append(run) or run)
         self.send_json(201, saved)

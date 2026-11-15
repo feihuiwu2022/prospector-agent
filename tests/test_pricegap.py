@@ -135,6 +135,27 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(cross_candidate["assumptions"]["sellingCurrency"], "CNY")
         self.assertEqual(cross_candidate["assumptions"]["purchaseCurrency"], "JPY")
 
+    def test_sellers_are_clustered_inside_a_configuration(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        group = next(item for item in result["groups"] if item["config"] == "12G+256G")
+        sellers = group["sellers"]
+        self.assertTrue(sellers)
+        self.assertEqual(sellers[0]["priceLow"], min(row["priceLow"] for row in sellers))
+        self.assertTrue(all("." in seller["seller"] for seller in sellers))
+
+    def test_price_history_summary_flags_moves_over_the_threshold(self) -> None:
+        history = [
+            {"platform": "京东", "config": "12G+256G", "price": 2099, "currency": "CNY", "observedAt": "2026-11-01"},
+            {"platform": "京东", "config": "12G+256G", "price": 1799, "currency": "CNY", "observedAt": "2026-11-08"},
+        ]
+        summary = pricegap.summarize_price_history(history)
+        self.assertEqual(len(summary["series"]), 1)
+        self.assertEqual(summary["series"][0]["observations"], 2)
+        self.assertEqual(len(summary["alerts"]), 1)
+        alert = summary["alerts"][0]
+        self.assertEqual(alert["direction"], "降价")
+        self.assertAlmostEqual(alert["changePct"], -0.1429, places=3)
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

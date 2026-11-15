@@ -285,7 +285,9 @@ function renderPriceGapReport(run) {
       ? `<b>${esc(group.config || "未识别配置")}</b> · 同配置毛差价 ${money(group.grossGap)}（${(Number(group.grossGapPct || 0) * 100).toFixed(1)}%）· 最低 ${esc(group.lowestPlatform)} / 最高 ${esc(group.highestPlatform)}${group.arbDirection ? ` · 套利方向 ${esc(group.arbDirection)}` : ""}`
       : `<b>${esc(group.config || "未识别配置")}</b> · ${esc((group.reasons || []).join("；") || "不可对比")}`;
     const caveats = (group.caveats || []).length ? `<ul>${group.caveats.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : "";
-    return `<div class="report-list"><b>${head}</b>${caveats}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>配置</th><th>可见报价</th><th>与同配置最低价差价</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    const sellers = (group.sellers || []).map((seller) => `<tr><td><b>${esc(seller.seller)}</b></td><td>${esc(seller.platform)}</td><td>${money(seller.priceLow)}</td><td>${seller.listingCount > 1 ? `${seller.listingCount} 个页面` : "1 个页面"}</td></tr>`).join("");
+    const sellerBlock = sellers ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>店铺 / 页面域名</th><th>平台</th><th>可见报价</th><th>页面数</th></tr></thead><tbody>${sellers}</tbody></table></div>` : "";
+    return `<div class="report-list"><b>${head}</b>${caveats}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>配置</th><th>可见报价</th><th>与同配置最低价差价</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>${sellerBlock ? `<div class="bottom-note"><span>ⓘ</span><span><strong>同款店铺分布：</strong>同一配置在不同店铺的可见报价；最低价通常来自补贴或清库存动作，不等于可持续拿货价。</span></div>${sellerBlock}` : ""}</div>`;
   }).join("");
   const summaryRows = (report.platformSummary || []).map((item) => `<tr>
     <td><b>${esc(item.platform)}</b></td>
@@ -296,6 +298,7 @@ function renderPriceGapReport(run) {
   const gaps = (report.gaps || []).map((item) => `<li>${esc(item)}</li>`).join("");
   const crossBorder = report.crossBorder ? `<div class="inline-alert">${esc(report.crossBorder.note)}</div>` : "";
   const historyBlocks = renderPriceHistory(report.history || []);
+  const alertBlocks = renderPriceAlerts(report.historySummary?.alerts || []);
   return `<section class="chat-result-card"><div class="chat-result-head"><b>同品跨平台比价</b><span>${esc(report.scope || "")}</span></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${crossBorder}${summaryRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>可见报价区间</th><th>配置</th><th>说明</th></tr></thead><tbody>${summaryRows}</tbody></table></div>` : ""}${groupBlocks || `<div class="inline-alert">没有找到带型号与价格的公开页面。可以换一个更通用的商品名再试。</div>`}${historyBlocks}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条可见报价 · 价格来自公开搜索摘要，未打开商品页核实 · 差价未扣佣金、广告、履约与退货，不是利润</small></section>`;
 }
 
@@ -320,6 +323,12 @@ function renderPriceHistory(history) {
     return `<tr><td><b>${esc(latest.platform)}</b><small>${esc(latest.config || "配置未识别")}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${esc(change)}</td><td>${sorted.length} 次观察</td></tr>`;
   }).join("");
   return `<div class="report-list"><b>历史观察（同一商品的公开页面报价记录）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>最近可见报价</th><th>观察日期</th><th>较上次</th><th>次数</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function renderPriceAlerts(alerts) {
+  if (!alerts.length) return "";
+  const rows = alerts.map((alert) => `<tr><td><b>${esc(alert.platform)}</b><small>${esc(alert.config || "配置未识别")}</small></td><td>${alert.direction}</td><td>${Number(alert.previousPrice).toLocaleString("zh-CN")} → ${Number(alert.latestPrice).toLocaleString("zh-CN")} ${esc(alert.latestCurrency || "")}</td><td>${esc(alert.note)}</td></tr>`).join("");
+  return `<div class="report-list"><b>价格变化提醒（阈值 ±5%）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>方向</th><th>最近两次报价</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function renderChatRun(run) {
@@ -464,7 +473,7 @@ function renderDetail() {
       <button class="back-button" data-action="home" aria-label="返回机会工作台">←</button>
       <div class="detail-symbol">${categoryIcon(candidate.category)}</div>
       <div class="detail-title"><h1>${esc(candidate.name)}</h1><div class="detail-meta"><span>${esc(candidate.category)}</span><span>·</span><span>${esc(candidate.market)}</span><span>·</span><span>${esc(candidate.platform)}</span><span>·</span><span>更新于 ${fmtDate(candidate.updatedAt)}</span></div></div>
-      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
+      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.priceGap ? `<button class="button-secondary" data-action="price-gap-pair" data-id="${esc(candidate.id)}">生成价差研究</button>` : ""}${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
     </div>
     <nav class="detail-tabs">${tabs.map(([key, label]) => `<button class="detail-tab ${state.tab === key ? "active" : ""}" data-action="tab" data-tab="${key}">${label}${key === "evidence" && candidate.evidence?.length ? ` <span>${candidate.evidence.length}</span>` : ""}</button>`).join("")}</nav>
     ${tabContent}
@@ -692,8 +701,9 @@ function renderDiscovery() {
   const runs = state.discoveryRuns.slice(0, 20).map((run) => {
     const strategy = state.discoveryStrategies.find((item) => item.id === run.strategyId);
     const modeTitle = ({ automatic_selection: "自动选品", manual_selection: "手动选品", competitor_analysis: "手动竞品分析" })[run.mode];
-    const status = run.status === "running" ? `运行中 · ${Number(run.progress || 0)}%` : run.status === "needs_human_review" ? "待审核" : run.status === "no_candidates" ? "无候选" : run.status === "failed" ? "失败" : "已完成";
-    return `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(strategy ? `策略 ${strategy.code} · ${strategy.title}` : modeTitle || run.trigger || "发现运行")}</span><h3>${esc(run.title || "Agent 研究运行")}</h3></div><time>${fmtDate(run.createdAt)}</time></div><p class="run-signal-note">${esc(run.message || run.summary || "等待任务开始")}</p><div class="run-signal-metrics"><span>${status}</span><span>${Number(run.candidateCount || 0)} 个候选</span><span>${Number(run.sourceCount || 0)} 条搜索结果</span></div></article>`;
+    const status = run.status === "running" ? `运行中 · ${Number(run.progress || 0)}%` : run.status === "needs_human_review" ? "待审核" : run.status === "no_candidates" ? "无候选" : run.status === "failed" ? "失败" : run.status === "needs_product_match_review" ? "待核对同款" : run.status === "needs_cost_input" ? "待补费用" : run.status === "needs_manual_validation" ? "待人工复核" : "已完成";
+    const matchBlock = run.trigger === "price_gap_pair" && run.matching ? `<div class="report-list"><b>同款校验：${esc(run.matching.status)}</b><ul>${(run.matching.reasons || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>${run.estimate ? `<p>按你填的汇率与费用估算：单件贡献利润 ${Number(run.estimate.estimatedContribution).toLocaleString("zh-CN")} ${esc(run.estimate.currency || "")}（${(Number(run.estimate.estimatedContributionMargin || 0) * 100).toFixed(1)}%）。</p>` : `<p>${esc(run.estimateError || "费用未填齐，未计算贡献利润。")}</p>`}</div>` : "";
+    return `<article class="discovery-run"><div class="discovery-run-head"><div><span class="run-type">${esc(strategy ? `策略 ${strategy.code} · ${strategy.title}` : modeTitle || (run.trigger === "price_gap_pair" ? "同款价差研究" : "发现运行"))}</span><h3>${esc(run.title || "Agent 研究运行")}</h3></div><time>${fmtDate(run.createdAt)}</time></div><p class="run-signal-note">${esc(run.message || run.summary || "等待任务开始")}</p><div class="run-signal-metrics"><span>${status}</span><span>${Number(run.candidateCount || 0)} 个候选</span><span>${Number(run.sourceCount || 0)} 条搜索结果</span></div>${matchBlock}</article>`;
   }).join("");
   content.innerHTML = `
     <div class="page-kicker">Sources & agent runs</div>
@@ -815,6 +825,19 @@ document.addEventListener("click", async (event) => {
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
     if (action === "profile") { state.view = "profile"; render(); return; }
+    if (action === "price-gap-pair") {
+      const created = await api("/api/discovery", { method: "POST", body: JSON.stringify({ trigger: "price_gap_pair", candidateId: button.dataset.id }) });
+      await refresh();
+      state.view = "discovery";
+      render();
+      const matching = created.matching || {};
+      if (matching.status === "exact_match" || matching.status === "probable_match") {
+        toast(created.estimate ? "规格匹配通过，贡献利润已按你填的假设估算。" : "规格匹配通过，但费用未填齐，请补齐汇率与成本后重算。");
+      } else {
+        toast("两侧规格/包装不一致，按规则不给出价差结论，请先核对商品页。");
+      }
+      return;
+    }
     if (action === "open") { state.selectedId = button.dataset.id; state.view = "detail"; state.tab = "overview"; render(); return; }
     if (action === "review-candidate") {
       const candidate = state.candidates.find((item) => item.id === button.dataset.id);
