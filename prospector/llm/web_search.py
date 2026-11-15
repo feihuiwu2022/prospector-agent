@@ -194,7 +194,8 @@ def search_many(queries: list[dict]) -> list[dict]:
                     "candidateRef": str(entry.get("candidateRef", "")),
                     "platformId": matched["id"] if matched else "",
                     "platformName": matched["name"] if matched else "",
-                    "platformRole": matched["role"] if matched else "",
+                    "platformRoles": matched["roles"] if matched else [],
+                    "platformRole": matched["roles"][0] if matched else "",
                 })
     finally:
         client.close()

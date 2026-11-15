@@ -23,6 +23,29 @@ const state = {
 };
 
 const content = document.querySelector("#app-content");
+
+function platformRoles(platform) {
+  return Array.isArray(platform?.roles) ? platform.roles : [platform?.role].filter(Boolean);
+}
+
+function salesPlatforms(market) {
+  return (state.platforms || []).filter((item) => platformRoles(item).includes("sales") && item.sales_market === market);
+}
+
+function sourcingPlatforms(market) {
+  return (state.platforms || []).filter((item) => platformRoles(item).includes("sourcing") && item.supply_market === market);
+}
+
+function marketOptions(selected) {
+  const markets = state.markets && state.markets.length ? state.markets : ["日本", "中国", "海外"];
+  return markets.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("");
+}
+
+function sourceMarketOptions(selected) {
+  const markets = [...new Set((state.platforms || []).map((item) => item.supply_market).filter(Boolean))];
+  const list = markets.length ? markets : ["中国"];
+  return list.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("");
+}
 const modalRoot = document.querySelector("#modal-root");
 const notice = document.querySelector("#notice");
 const activeDiscoveryWatchers = new Set();
@@ -257,7 +280,11 @@ function renderHome() {
   const strategies = state.discoveryStrategies || [];
   const messages = conversation?.messages?.map(renderChatMessage).join("") || `<div class="chat-agent-row welcome-row"><span class="chat-avatar">✳</span><div class="chat-bubble agent-bubble"><b>我是你的选品 Agent。</b><br>${esc(mode.description)}<br><small>我会搜索公开网页线索、保留来源，并把事实与推断分开展示。</small></div></div>`;
   const market = conversation ? (conversation.market || state.profile.market || "日本") : (state.chatMarket || state.profile.market || "日本");
-  const platform = conversation ? (conversation.platform || state.profile.platform || "Amazon.co.jp") : (state.chatPlatform || state.profile.platform || "Amazon.co.jp");
+  const platform = conversation ? (conversation.platform || state.profile.platform || "") : (state.chatPlatform || state.profile.platform || "");
+  const marketChannels = salesPlatforms(market);
+  const platformOptions = marketChannels.length
+    ? marketChannels.map((item) => `<option value="${esc(item.name)}" ${item.name === platform ? "selected" : ""}>${esc(item.name)}</option>`).join("")
+    : `<option value="${esc(platform)}">${esc(platform || "待确认")}</option>`;
   const activeStrategy = strategies.find((item) => item.id === state.chatStrategyId);
   content.innerHTML = `
     <div class="page-kicker">Agent research workspace</div>
@@ -268,7 +295,7 @@ function renderHome() {
       <div class="chat-context"><div><span class="agent-live-dot ${state.webSearch?.configured ? "" : "offline"}"></span><b>${state.webSearch?.configured ? "Agent 已连接公开网页搜索" : "搜索服务未配置"}</b><small>${esc(state.webSearch?.message || "")}</small></div>${conversation ? `<span class="conversation-title">${esc(conversation.title || "Agent 会话")}</span>` : ""}</div>
       <div class="chat-transcript" id="chat-transcript">${messages}</div>
       <form id="chat-form" class="chat-composer">
-        <div class="chat-composer-context"><label>目标市场<input name="market" value="${esc(market)}" /></label><label>优先平台<input name="platform" value="${esc(platform)}" /></label>${state.chatMode === "automatic_selection" ? `<span class="selected-strategy-label">${esc(strategies.find((item) => item.id === state.chatStrategyId)?.title || "选择策略")}</span>` : ""}</div>
+        <div class="chat-composer-context"><label>目标市场<select name="market" data-change="chat-market">${marketOptions(market)}</select></label><label>优先平台<select name="platform">${platformOptions}</select></label>${state.chatMode === "automatic_selection" ? `<span class="selected-strategy-label">${esc(strategies.find((item) => item.id === state.chatStrategyId)?.title || "选择策略")}</span>` : ""}</div>
         <div class="sugg-chips">${(mode.suggestions || []).map((text) => `<button type="button" data-action="use-suggestion" data-text="${esc(text)}">${esc(text)}</button>`).join("")}</div>
         <textarea name="message" rows="2" placeholder="${esc(mode.placeholder)}" ${state.chatMode === "automatic_selection" ? "" : "required"}></textarea>
         <div class="chat-composer-bottom"><small>${state.chatMode === "automatic_selection" ? "可以留空；策略会决定 Agent 的发现方向。" : "Agent 会根据你的描述自动规划搜索，不需要你先查好竞品。"} 搜索摘要需要点开来源核实。</small><button class="button-primary" type="submit" ${!state.webSearch?.configured ? "disabled" : ""}>${state.chatMode === "competitor_analysis" ? "开始竞品分析" : "发送给 Agent"} <span>↑</span></button></div>
@@ -345,7 +372,7 @@ function renderAgentCandidate(candidate) {
   const reviewControls = review
     ? `<span class="status-pill ${review.decision === "continue" ? "done" : review.decision === "reject" ? "bad" : "warn"}">${reviewLabel}</span>${review.reason ? `<span class="candidate-review-reason">理由：${esc(review.reason)}</span>` : ""}`
     : `<div class="candidate-review-actions"><button data-action="review-candidate" data-id="${esc(candidate.id)}" data-decision="continue">继续研究</button><button data-action="review-candidate" data-id="${esc(candidate.id)}" data-decision="hold">暂缓</button><button data-action="review-candidate" data-id="${esc(candidate.id)}" data-decision="reject">淘汰</button></div>`;
-  return `<article class="agent-candidate"><div class="candidate-card-top"><span class="candidate-strategy">${esc(candidate.strategyCode ? `策略 ${candidate.strategyCode}` : "研究项目")} · ${esc(strategy || "")}</span><span class="status-pill ${recommendation === "keep" ? "done" : ""}">${recommendationLabel}</span></div><div class="candidate-card-title"><div class="product-icon">${categoryIcon(candidate.category)}</div><div><h3>${esc(candidate.name)}</h3><small>${esc(candidate.category)} · ${esc(candidate.market)} / ${esc(candidate.platform)}</small></div></div><p class="candidate-conclusion">${esc(conclusion || "等待 Agent 研究结果")}</p>${candidate.agentResearch ? `<div class="candidate-assessments"><div><small>市场核验</small><span>${esc(candidate.agentResearch.marketAssessment || "待核验")}</span></div><div><small>中国货源</small><span>${esc(candidate.agentResearch.sourcingAssessment || "待核验")}</span></div><div><small>利润</small><span>${candidate.agentResearch.profitReadiness === "blocked" ? "数据不足，暂不估算" : "需复核来源"}</span></div></div>` : ""}<div class="candidate-card-meta"><span>${sourceCount} 条来源线索</span><span>信号置信度 ${esc(candidate.agentDiscovery?.confidence || "待定")}</span></div>${sources ? `<div class="candidate-source-links">${sources}</div>` : ""}<div class="candidate-card-actions"><button class="button-secondary" data-action="open" data-id="${esc(candidate.id)}">查看候选与证据</button>${reviewControls}</div></article>`;
+  return `<article class="agent-candidate"><div class="candidate-card-top"><span class="candidate-strategy">${esc(candidate.strategyCode ? `策略 ${candidate.strategyCode}` : "研究项目")} · ${esc(strategy || "")}</span><span class="status-pill ${recommendation === "keep" ? "done" : ""}">${recommendationLabel}</span></div><div class="candidate-card-title"><div class="product-icon">${categoryIcon(candidate.category)}</div><div><h3>${esc(candidate.name)}</h3><small>${esc(candidate.category)} · ${esc(candidate.market)} / ${esc(candidate.platform)}</small></div></div><p class="candidate-conclusion">${esc(conclusion || "等待 Agent 研究结果")}</p>${candidate.agentResearch ? `<div class="candidate-assessments"><div><small>市场核验</small><span>${esc(candidate.agentResearch.marketAssessment || "待核验")}</span></div><div><small>${esc(candidate.sourcingCountry || "中国")}货源</small><span>${esc(candidate.agentResearch.sourcingAssessment || "待核验")}</span></div><div><small>利润</small><span>${candidate.agentResearch.profitReadiness === "blocked" ? "数据不足，暂不估算" : "需复核来源"}</span></div></div>` : ""}<div class="candidate-card-meta"><span>${sourceCount} 条来源线索</span><span>信号置信度 ${esc(candidate.agentDiscovery?.confidence || "待定")}</span></div>${sources ? `<div class="candidate-source-links">${sources}</div>` : ""}<div class="candidate-card-actions"><button class="button-secondary" data-action="open" data-id="${esc(candidate.id)}">查看候选与证据</button>${reviewControls}</div></article>`;
 }
 
 const tabs = [
@@ -412,7 +439,7 @@ function renderOverview(candidate) {
       <div>
         <section class="panel"><div class="panel-head"><div><h3>Agent 选品判断</h3><small>${esc(candidate.strategyTitle || "指定商品研究")}${candidate.agentDiscovery?.confidence ? ` · 信号置信度 ${esc(candidate.agentDiscovery.confidence)}` : ""}</small></div><span class="status-pill">${statusLabel(candidate.status)}</span></div><div class="hypothesis-box">${esc(statusNote)}</div>${research ? `<div class="agent-final-review"><b>Agent 初筛：${({ keep: "进入人工审核", hold: "补证后审核", reject: "暂缓" })[research.recommendation] || "待审核"}</b><p>${esc(research.recommendationReason)}</p></div>` : ""}<div style="display:flex;gap:7px;margin-top:11px"><button class="button-secondary" data-action="tab" data-tab="evidence">查看来源证据</button><button class="button-quiet" data-action="tab" data-tab="tasks">查看 Agent 任务 →</button></div></section>
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
-        ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>日本市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>中国货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
+        ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
         <section class="panel"><div class="panel-head"><h3>Agent 研究队列</h3><small>${candidate.tasks.length} 项专业任务</small></div><div class="task-list">${candidate.tasks.slice(0, 5).map(renderTaskRow).join("")}</div><div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="text-link" data-action="tab" data-tab="tasks">查看全部任务 →</button></div></section>
         <section class="panel"><div class="panel-head"><h3>利润模型</h3><small>JPY · 用户输入假设</small></div>${candidate.profit?.complete ? `<div class="profit-result"><div class="profit-metric"><span>单件贡献利润</span><b class="${candidate.profit.contributionProfit < 0 ? "negative" : ""}">¥${fmtYen(candidate.profit.contributionProfit)}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${candidate.profit.contributionMargin < 0 ? "negative" : ""}">${(candidate.profit.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>¥${fmtYen(candidate.profit.breakEvenAdCost)}</b></div></div>` : `<div class="inline-alert">利润假设未填完整。补齐售价、采购价、汇率和履约成本后才会计算。</div>`}<div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="text-link" data-action="tab" data-tab="profit">编辑利润假设 →</button></div></section>
       </div>
@@ -506,15 +533,17 @@ function reportMarkdown(candidate) {
   const profit = candidate.profit?.complete ? `单件贡献利润：¥${fmtYen(candidate.profit.contributionProfit)} JPY；贡献利润率：${(candidate.profit.contributionMargin * 100).toFixed(1)}%。` : "利润模型尚未填完。";
   const tasks = candidate.tasks.map((task) => `- ${task.title}：${taskStatusLabel(task.status)}${task.result?.text ? `\n\n${task.result.text}` : ""}`).join("\n");
   const workflow = (candidate.workflowStages || []).map((stage) => `- ${stage.number}. ${stage.title}：${stage.status}。${stage.note || ""}`).join("\n");
+  const marketName = candidate.market || "日本";
+  const sourceCountry = candidate.sourcingCountry || "中国";
   const validationPlan = [
-    `- [ ] 需求：${evidenceDimensions.has("demand") ? "复核来源时间范围与目标顾客相关性，再确认需求是否持续。" : "从授权的日本市场来源收集需求信号，并记录来源和采集日期。"}`,
-    `- [ ] 竞品：${evidenceDimensions.has("competition") ? "抽样比较同类商品的价格、差评主题和品牌集中度。" : "记录日本站同类商品页面、定价和评论痛点。"}`,
-    `- [ ] 供应链：${evidenceDimensions.has("sourcing") ? "向多家供应商核实 MOQ、样品、交期、包装规格和书面报价。" : "获取至少一条可追溯的中国供应链线索，并询问 MOQ、样品和交期。"}`,
+    `- [ ] 需求：${evidenceDimensions.has("demand") ? "复核来源时间范围与目标顾客相关性，再确认需求是否持续。" : `从授权的${marketName}市场来源收集需求信号，并记录来源和采集日期。`}`,
+    `- [ ] 竞品：${evidenceDimensions.has("competition") ? "抽样比较同类商品的价格、差评主题和品牌集中度。" : `记录${marketName}站同类商品页面、定价和评论痛点。`}`,
+    `- [ ] 供应链：${evidenceDimensions.has("sourcing") ? "向多家供应商核实 MOQ、样品、交期、包装规格和书面报价。" : `获取至少一条可追溯的${sourceCountry}供应链线索，并询问 MOQ、样品和交期。`}`,
     `- [ ] 利润：${candidate.profit?.complete ? "用已核实的 FBA、佣金、物流和退货数据替换假设，再做保守情景。" : "补齐售价、采购价、汇率、头程、FBA、佣金、广告与退货预留。"}`,
     `- [ ] 合规与运营：确认商品规格、运输限制、平台限制、进口要求、认证和知识产权事项。`,
     `- [ ] 决策：人工复核来源和风险后，再决定小批量测试或暂停；本系统不自动采购。`,
   ].join("\n");
-  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## 日本市场需求\n\n${evidenceFor("demand")}\n\n## 日本站竞品\n\n${evidenceFor("competition")}\n\n## 中国供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
+  return `# ${candidate.name}\n\n- 类目：${candidate.category}\n- 市场/平台：${candidate.market} / ${candidate.platform}\n- 选品策略：${candidate.strategyTitle || "指定商品研究"}\n- 研究模式：${modeLabel(candidate.mode)}\n- 状态：${statusLabel(candidate.status)}\n- 更新时间：${candidate.updatedAt}\n\n## 研究假设\n\n${candidate.hypothesis || "待补充"}\n\n## Agent 六步工作流\n\n${workflow || "- 尚无自动选品运行记录。"}\n\n## 四项独立判断\n\n系统不生成加权总分；风险水平单独展示，分数越高代表风险越高。\n\n| 指标 | 分数 | 方向 | 判断依据 | 关联来源 |\n|---|---:|---|---|---|\n${rows || "| 尚无独立判断 | — | — | — | — |"}\n\n未完成指标：${missingScores.length ? missingScores.map((key) => state.scoreLabels[key]?.label || key).join("、") : "无"}\n\n## ${esc(candidate.market || "日本")}市场需求\n\n${evidenceFor("demand")}\n\n## ${esc(candidate.market || "日本")}站竞品\n\n${evidenceFor("competition")}\n\n## ${esc(candidate.sourcingCountry || "中国")}供应链线索\n\n${evidenceFor("sourcing")}\n\n## 利润情景\n\n${profit}\n\n${evidenceFor("margin")}\n\n## 运营与履约\n\n${evidenceFor("operations")}\n\n## 合规与知识产权待确认\n\n${evidenceFor("compliance")}\n\n## 证据缺口\n\n${gaps.length ? gaps.join("\n") : "- 六类研究领域均已记录来源，来源真实性和独立性仍需人工复核。"}\n\n## 下一步小批量验证计划\n\n${validationPlan}\n\n## Agent 任务状态\n\n${tasks}\n\n## 限制\n\n来源数量不代表来源已核实；汇率、费用和市场数据需要人工确认。合规内容只用于提示审查方向。本报告不构成采购建议。\n`;
 }
 
 function renderReport(candidate) {
@@ -524,15 +553,21 @@ function renderReport(candidate) {
 
 function renderProfile() {
   const profile = state.profile || {};
-  const sourcingOptions = (state.platforms || []).filter((item) => item.role === "sourcing");
+  const market = profile.market || "日本";
+  const sourceCountry = profile.sourcingCountry || "中国";
+  const sourcingOptions = sourcingPlatforms(sourceCountry);
+  const marketChannels = salesPlatforms(market);
+  const platformOptions = marketChannels.length
+    ? marketChannels.map((item) => `<option value="${esc(item.name)}" ${item.name === profile.platform ? "selected" : ""}>${esc(item.name)}</option>`).join("")
+    : `<option value="${esc(profile.platform || "")}">${esc(profile.platform || "待确认")}</option>`;
   const chosenSources = Array.isArray(profile.sourcingPlatforms) ? profile.sourcingPlatforms : [];
   content.innerHTML = `
     <div class="page-kicker">Operating profile</div>
     <div class="page-heading"><div><h1>经营资源画像</h1><p>用它判断机会是否适合当前资源；画像不会调整基础机会评分。</p></div></div>
     <div class="resource-layout"><section class="panel"><div class="panel-head"><h3>当前经营条件</h3><small>字段可留空</small></div><form id="profile-form" class="form-grid">
-      <div class="field"><label>目标市场</label><input name="market" value="${esc(profile.market || "")}" placeholder="例如：日本" /></div>
-      <div class="field"><label>优先平台</label><input name="platform" value="${esc(profile.platform || "")}" placeholder="例如：Amazon.co.jp" /></div>
-      <div class="field"><label>采购来源国家</label><input name="sourcingCountry" value="${esc(profile.sourcingCountry || "")}" placeholder="例如：中国" /></div>
+      <div class="field"><label>目标市场</label><select name="market" data-change="profile-market">${marketOptions(market)}</select></div>
+      <div class="field"><label>优先平台</label><select name="platform">${platformOptions}</select></div>
+      <div class="field"><label>采购来源国家</label><select name="sourcingCountry">${sourceMarketOptions(sourceCountry)}</select></div>
       <div class="field full"><label>优先货源平台（Agent 按此规划货源搜索式）</label>
         <div class="check-grid">${sourcingOptions.map((item) => `<label class="check-option"><input type="checkbox" name="sourcingPlatforms" value="${esc(item.id)}" ${chosenSources.includes(item.id) ? "checked" : ""} /><span><b>${esc(item.name)}</b><small>${esc(item.note)}</small></span></label>`).join("")}</div>
       </div>
@@ -541,9 +576,9 @@ function renderProfile() {
       <div class="field"><label>风险偏好</label><select name="riskTolerance"><option value="" ${!profile.riskTolerance ? "selected" : ""}>未设置</option><option ${profile.riskTolerance === "低风险" ? "selected" : ""}>低风险</option><option ${profile.riskTolerance === "中等风险" ? "selected" : ""}>中等风险</option><option ${profile.riskTolerance === "较高风险" ? "selected" : ""}>较高风险</option></select></div>
       <div class="field"><label>库存承受度</label><select name="inventoryTolerance"><option value="" ${!profile.inventoryTolerance ? "selected" : ""}>未设置</option><option ${profile.inventoryTolerance === "不囤货" ? "selected" : ""}>不囤货</option><option ${profile.inventoryTolerance === "允许少量囤货" ? "selected" : ""}>允许少量囤货</option><option ${profile.inventoryTolerance === "可批量备货" ? "selected" : ""}>可批量备货</option></select></div>
       <div class="field"><label>供应链能力</label><input name="sourcingCapabilities" value="${esc(profile.sourcingCapabilities || "")}" placeholder="工厂、验货、定制等" /></div>
-      <p class="form-help">货源平台决定 Agent 去找哪些国内货源页面；未勾选时使用默认集合（1688 / 淘宝 / 京东 / 拼多多）。这些平台当前只提供公开页面线索，正式报价与 MOQ 仍需另行授权或人工确认。</p>
+      <p class="form-help">目标市场决定 Agent 去哪些销售平台核对竞品与价格带；货源平台决定 Agent 去找哪些源头页面。未勾选时使用该来源国的默认集合。这些平台当前只提供公开页面线索，正式报价与 MOQ 仍需另行授权或人工确认。</p>
       <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存经营画像</button></div></div>
-    </form></section><aside class="resource-aside"><div class="hero-overline">Scoring policy</div><h3>画像做适配，不替你做决定。</h3><p>基础机会分用于比较市场、利润和风险证据。你的预算、备货能力和风险偏好单独显示，帮助你理解“机会不错”是否等于“现在适合做”。</p><ul><li>日本销售 · Amazon.co.jp 优先</li><li>中国采购 · 日本 FBA</li><li>预算示例 ¥100,000 CNY，可修改或清空</li><li>乐天和其他市场留作后续扩展</li></ul></aside></div>
+    </form></section><aside class="resource-aside"><div class="hero-overline">Scoring policy</div><h3>画像做适配，不替你做决定。</h3><p>基础机会分用于比较市场、利润和风险证据。你的预算、备货能力和风险偏好单独显示，帮助你理解“机会不错”是否等于“现在适合做”。</p><ul><li>${esc(market)}销售 · ${esc(profile.platform || "待确认平台")} 优先</li><li>${esc(sourceCountry)}采购 · ${esc(profile.fulfillment || "履约待确认")}</li><li>预算示例 ¥100,000 CNY，可修改或清空</li><li>目标市场可切到中国或海外，平台清单随市场变化</li></ul></aside></div>
   `;
 }
 
@@ -551,8 +586,9 @@ function renderDiscovery() {
   const webSearch = state.webSearch || {};
   const statusLabel = { web_search: "公开搜索线索", manual_source: "人工记录", restricted_api: "权限受限", authorization_required: "官方 API 待授权" };
   const roleOrder = ["demand", "sales", "sourcing"];
+  const targetMarket = state.profile?.market || "日本";
   const roleGroups = roleOrder.map((role) => {
-    const items = (state.connectors || []).filter((item) => item.role === role);
+    const items = (state.connectors || []).filter((item) => platformRoles(item).includes(role));
     if (!items.length) return "";
     const cards = items.map((item) => `
       <article class="connector-card">
@@ -560,12 +596,13 @@ function renderDiscovery() {
         <p>${esc(item.access)}</p>
         <small>${esc(item.note)}</small>
         <div class="connector-channel"><span>授权通道</span>${esc(item.authorizationChannel || "—")}</div>
+        <div class="connector-channel"><span>市场归属</span>${esc([item.salesMarket, item.supplyMarket].filter(Boolean).join(" / ") || "—")}</div>
       </article>`).join("");
-    const title = { demand: "需求与内容侧", sales: "销售市场侧", sourcing: "货源侧（国内供给）" }[role];
+    const title = { demand: "需求与内容侧", sales: "销售市场侧", sourcing: "货源侧（供给来源）" }[role];
     const hint = {
       demand: "用来判断需求是否真的出现：相对热度、内容热度与反复出现的抱怨。热度不等于成交。",
-      sales: "用来验证市场：竞品数量、价格带、评价主题与市场空位。当前目标市场是日本。",
-      sourcing: "用来寻找货源与成本：产业带、工厂线索与国内电商报价。零售挂牌价不等于可复制的源头成本。",
+      sales: `用来验证市场：竞品数量、价格带、评价主题与市场空位。当前目标市场是${targetMarket}。`,
+      sourcing: "用来寻找货源与成本：产业带、工厂线索与电商挂牌价。零售挂牌价不等于可复制的源头成本。",
     }[role];
     return `<section class="panel"><div class="panel-head"><div><h3>${title}</h3><small>${hint}</small></div><span class="connector-count">${items.length} 个平台</span></div><div class="connector-grid">${cards}</div></section>`;
   }).join("");
@@ -595,8 +632,8 @@ function showNewModal() {
         <div class="form-grid">
           <div class="field full"><label for="create-name">研究名称 / 商品名称</label><input id="create-name" name="name" placeholder="例如：可折叠的玄关收纳架" /></div>
           <div class="field"><label for="create-category">研究品类</label><select id="create-category" name="category">${state.categories.map((item) => `<option>${esc(item)}</option>`).join("")}</select></div>
-          <div class="field"><label for="create-market">目标市场</label><input id="create-market" name="market" value="日本" /></div>
-          <div class="field"><label for="create-platform">优先平台</label><input id="create-platform" name="platform" value="Amazon.co.jp" /></div>
+          <div class="field"><label for="create-market">目标市场</label><select id="create-market" name="market">${marketOptions(state.profile?.market || "日本")}</select></div>
+          <div class="field"><label for="create-platform">优先平台</label><input id="create-platform" name="platform" value="${esc(state.profile?.platform || "Amazon.co.jp")}" /></div>
           <div class="field"><label for="create-fulfillment">履约方式</label><input id="create-fulfillment" name="fulfillment" value="日本 FBA" /></div>
           <div class="field full"><label for="create-hypothesis">需求或研究假设</label><textarea id="create-hypothesis" name="hypothesis" placeholder="目标人群、遇到的问题、想验证的差异化或商品链接。"></textarea></div>
         </div>
@@ -715,7 +752,7 @@ document.addEventListener("click", async (event) => {
       const run = await api("/api/agent/discovery", { method: "POST", body: JSON.stringify({ strategyId: button.dataset.strategy }) });
       state.view = "home";
       await refresh();
-      toast("Agent 已开始搜索趋势、市场和中国货源；完成后会通知你审核候选。", false);
+      toast("Agent 已开始搜索趋势、市场与货源；完成后会通知你审核候选。", false);
       watchAgentDiscovery(run.id);
       return;
     }
@@ -891,6 +928,22 @@ document.addEventListener("submit", async (event) => {
       await refresh(); state.view = "profile"; render(); toast("经营画像已保存；基础机会分不变。"); return;
     }
   } catch (error) { toast(error.message, true); }
+});
+
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (target.dataset.change === "chat-market") {
+    state.chatMarket = target.value;
+    state.chatPlatform = "";
+    renderHome();
+    return;
+  }
+  if (target.dataset.change === "profile-market") {
+    // Preview the platform list of the new market without saving yet.
+    state.profile = { ...state.profile, market: target.value };
+    renderProfile();
+  }
 });
 
 document.addEventListener("keydown", (event) => {

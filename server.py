@@ -20,6 +20,7 @@ from prospector.agent_discovery import run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
+from prospector.platforms import MARKETS, default_platform_for_market, sales_channels, supply_markets
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
     SCORE_EVIDENCE_DIMENSIONS,
@@ -229,6 +230,7 @@ class Handler(BaseHTTPRequestHandler):
                 "conversations": sorted(data.get("conversations", []), key=lambda item: item.get("updatedAt", ""), reverse=True),
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
+                "markets": MARKETS,
                 "llmProvider": llm_provider_status(),
                 "webSearch": web_search_status(),
                 "discoveryStrategies": strategy_catalog(),
@@ -293,6 +295,8 @@ class Handler(BaseHTTPRequestHandler):
         if mode not in MODES:
             raise ValueError("研究模式无效。")
         category = str(body.get("category", "其他")).strip()[:80] or "其他"
+        profile = STORE.read().get("profile", DEFAULT_PROFILE)
+        candidate_market = str(body.get("market") or profile.get("market", "日本"))[:80]
         name = str(body.get("name", "")).strip()[:160]
         hypothesis = str(body.get("hypothesis", "")).strip()[:2000]
         if mode == "specified_product" and not name:
@@ -302,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
         if mode == "discovery" and not name:
             name = f"待发现机会：{category}"
         if not hypothesis and mode == "discovery":
-            hypothesis = f"在 {category} 中查找有来源支持的日本站需求机会。"
+            hypothesis = f"在 {category} 中查找有来源支持的{candidate_market}站需求机会。"
         if not name and hypothesis:
             name = hypothesis[:100]
 
@@ -312,10 +316,10 @@ class Handler(BaseHTTPRequestHandler):
             "name": name,
             "category": category,
             "hypothesis": hypothesis,
-            "market": str(body.get("market", "日本"))[:80],
-            "platform": str(body.get("platform", "Amazon.co.jp"))[:80],
-            "sourcingCountry": str(body.get("sourcingCountry", "中国"))[:80],
-            "fulfillment": str(body.get("fulfillment", "日本 FBA"))[:80],
+            "market": candidate_market,
+            "platform": str(body.get("platform") or profile.get("platform") or default_platform_for_market(candidate_market))[:80],
+            "sourcingCountry": str(body.get("sourcingCountry", profile.get("sourcingCountry", "中国")))[:80],
+            "fulfillment": str(body.get("fulfillment", profile.get("fulfillment", f"{candidate_market} FBA")))[:80],
             "mode": mode,
             "status": "researching",
             "assumptions": {},
@@ -438,7 +442,8 @@ class Handler(BaseHTTPRequestHandler):
         profile = {
             **base_profile,
             "market": str(body.get("market") or base_profile.get("market", "日本"))[:80],
-            "platform": str(body.get("platform") or base_profile.get("platform", "Amazon.co.jp"))[:80],
+            "platform": str(body.get("platform") or base_profile.get("platform") or default_platform_for_market(str(body.get("market") or base_profile.get("market", "日本"))))[:80],
+            "sourcingCountry": str(body.get("sourcingCountry") or base_profile.get("sourcingCountry", "中国"))[:80],
         }
         conversation_id = str(body.get("conversationId", "")).strip()
         created_at = utc_now()
@@ -510,7 +515,13 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             if mode == "competitor_analysis":
-                result = run_competitor_analysis(prompt, profile.get("market", "日本"), profile.get("platform", "Amazon.co.jp"), update_progress)
+                result = run_competitor_analysis(
+                    prompt,
+                    profile.get("market", "日本"),
+                    profile.get("platform", ""),
+                    update_progress,
+                    source_country=profile.get("sourcingCountry", "中国"),
+                )
                 candidates = []
                 final_status = "completed"
                 summary = result.get("summary", "竞品扫描完成。")
@@ -878,12 +889,26 @@ class Handler(BaseHTTPRequestHandler):
     def handle_api_patch(self, path: str, body: dict) -> None:
         if path == "/api/profile":
             allowed = set(DEFAULT_PROFILE)
+            market = str(body.get("market", "")).strip()[:80]
+            if market and market not in MARKETS:
+                raise ValueError(f"目标市场需为 {'、'.join(MARKETS)} 之一。")
+            source_country = str(body.get("sourcingCountry", "")).strip()[:80]
+            if source_country and source_country not in supply_markets():
+                raise ValueError(f"采购来源国需为 {'、'.join(supply_markets())} 之一。")
 
             def save_profile(data):
                 profile = data.setdefault("profile", dict(DEFAULT_PROFILE))
+                previous_market = str(profile.get("market", "日本"))
                 for key, value in body.items():
                     if key in allowed:
                         profile[key] = value
+                current_market = str(profile.get("market", "日本"))
+                names = {item["name"] for item in sales_channels(current_market)}
+                if current_market != previous_market and str(profile.get("platform", "")) not in names:
+                    # The old platform does not sell into the new market.
+                    profile["platform"] = default_platform_for_market(current_market)
+                if not str(profile.get("platform", "")).strip():
+                    profile["platform"] = default_platform_for_market(current_market)
                 return profile
 
             self.send_json(200, STORE.update(save_profile))

@@ -100,12 +100,33 @@ class ServerSmokeTest(unittest.TestCase):
         names = {item["name"] for item in data["platforms"]}
         for expected in ("抖音", "快手", "淘宝 / 天猫", "京东", "拼多多"):
             self.assertIn(expected, names)
-        roles = {item["role"] for item in data["connectors"]}
+        roles = {role for item in data["connectors"] for role in item["roles"]}
         self.assertEqual(roles, {"demand", "sales", "sourcing"})
         for connector in data["connectors"]:
             self.assertIn(connector["status"], {"web_search", "manual_source", "restricted_api", "authorization_required"})
             self.assertTrue(connector["access"], f"{connector['platform']} 缺少访问方式说明")
             self.assertTrue(connector["authorizationChannel"], f"{connector['platform']} 缺少授权通道说明")
+
+    def test_markets_drive_sales_and_supply_channels(self) -> None:
+        data = json.loads(_get(f"{self.base}/api/bootstrap")[2])
+        self.assertEqual(data["markets"], ["日本", "中国", "海外"])
+        platforms = data["platforms"]
+        japan = [item["name"] for item in platforms if "sales" in item["roles"] and item.get("sales_market") == "日本"]
+        self.assertIn("Amazon.co.jp", japan)
+        china = [item["name"] for item in platforms if "sales" in item["roles"] and item.get("sales_market") == "中国"]
+        self.assertIn("淘宝 / 天猫", china)
+        supply = [item["name"] for item in platforms if "sourcing" in item["roles"] and item.get("supply_market") == "中国"]
+        self.assertIn("1688", supply)
+
+    def test_profile_market_switch_resets_platform(self) -> None:
+        status, _ = _post(f"{self.base}/api/profile", {"market": "中国"}, method="PATCH")
+        self.assertEqual(status, 200)
+        profile = json.loads(_get(f"{self.base}/api/bootstrap")[2])["profile"]
+        self.assertEqual(profile["market"], "中国")
+        self.assertEqual(profile["platform"], "淘宝 / 天猫")
+        status, payload = _post(f"{self.base}/api/profile", {"market": "东南亚"}, method="PATCH")
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
 
     def test_profile_round_trip(self) -> None:
         status, _ = _post(f"{self.base}/api/profile", {"sourcingPlatforms": ["1688", "jd"]}, method="PATCH")

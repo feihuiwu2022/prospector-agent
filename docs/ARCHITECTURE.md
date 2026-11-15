@@ -109,12 +109,12 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 
 ### Agent 编排器
 
-- `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（需求与内容侧 / 销售市场侧 / 货源侧）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录和经营画像都读这张表；新增平台是改数据而不是改多处代码。
+- `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（`roles` 可多选：需求与内容侧 / 销售市场侧 / 货源侧）、销售市场（`sales_market`）、供给市场（`supply_market`）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录、经营画像和候选证据归类都读这张表；新增平台是改数据而不是改多处代码。目标市场（`MARKETS`：日本 / 中国 / 海外）决定销售平台清单，采购来源国决定货源平台清单。
 - `prospector/strategies.py`：策略与六阶段目录。
 - `prospector/agent_discovery.py`：查询计划、候选生成、市场/货源复查、证据绑定。
 - `prospector/llm/web_search.py`：MiniMax Coding Plan 官方 Web Search MCP stdio 客户端。
 
-搜索结果按 URL 实际域名判定平台归属（`platform_for_url`），因为该后端把 `site:` 当提示而非过滤；证据的 `sourceType` 因此永远写实际来源平台，搜索式原目标写在备注里。证据维度按平台角色归类（需求 / 竞品 / 货源），而不是按搜索式的阶段归类。
+搜索结果按 URL 实际域名判定平台归属（`platform_for_url`），因为该后端把 `site:` 当提示而非过滤；证据的 `sourceType` 因此永远写实际来源平台，搜索式原目标写在备注里。证据维度按平台实际角色与当前研究范围归类（`platform_dimension`）：同一个平台在不同目标市场里角色不同——淘宝在目标市场为中国时是竞品，在“中国采购 → 日本销售”的范围里是国内货源对照。搜索式阶段只作为无法匹配平台时的兜底。
 - `prospector/llm/minimax.py`：MiniMax Messages 模型客户端，密钥从环境或 Pi Agent 本机配置读取。
 - `prospector/agent_runtime.py`：对已存在候选的专项任务分析。
 

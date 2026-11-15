@@ -1,16 +1,23 @@
-"""Platform registry: one table for role, access level and search targeting.
+"""Platform registry: one table for role, market and search targeting.
 
-Every platform the Agent can touch is described here exactly once. Query
-planning, the connector catalogue and the profile form all read this table, so
-adding a platform is a data change rather than a code change scattered over
-the discovery prompts.
+Every platform the Agent can touch is described here exactly once, so query
+planning, the connector catalogue, the profile form and the price-comparison
+mode all agree on what a platform is.
 
-Roles:
-  demand   content and trend platforms used to discover demand
-  sales    marketplaces where the product is sold (market validation)
-  sourcing supply platforms used to find goods and cost (sourcing validation)
+roles
+  demand    content and trend platforms used to discover demand
+  sales     marketplaces where a product is sold
+  sourcing  supply platforms used to buy goods and check cost
 
-Access levels:
+A platform can hold several roles. 1688 only supplies; 淘宝/天猫, 京东 and 拼多多
+both supply and sell inside China; 抖音 and 快手 carry demand signals and also
+run their own storefronts.
+
+markets
+  sales_market   the market a platform sells into ("中国" / "日本" / "海外")
+  supply_market  the market a platform supplies from
+
+access
   web_search              reachable only as public web page mentions
   manual_source           a human records the page or pastes the data
   authorization_required  needs an official app / API scope before real data
@@ -20,40 +27,11 @@ from __future__ import annotations
 
 
 PLATFORMS = {
-    # ---- 需求与内容侧（国内）----
-    "douyin": {
-        "id": "douyin",
-        "name": "抖音",
-        "role": "demand",
-        "region": "国内",
-        "access": "web_search",
-        "capabilities": ["public_trend_mentions", "content_discovery"],
-        "accessText": "MiniMax Web Search 搜索公开页面；热点榜、视频数据与商品数据需抖音开放平台应用与对应 scope",
-        "note": "官方开放平台把热点、视频与电商能力拆成不同接口，未授权前只有公开页面文案可用。",
-        "sites": ["douyin.com"],
-        "keyword": "抖音",
-        "searchLabel": "抖音公开网页线索",
-        "authorizationChannel": "抖音开放平台（应用创建 + OAuth + 对应 scope）",
-    },
-    "kuaishou": {
-        "id": "kuaishou",
-        "name": "快手",
-        "role": "demand",
-        "region": "国内",
-        "access": "web_search",
-        "capabilities": ["public_trend_mentions", "content_discovery"],
-        "accessText": "MiniMax Web Search 搜索公开页面；直播与广告投放数据需快手开放平台 / 磁力引擎资质授权",
-        "note": "公开页面线索不等于官方热榜、直播成交或达人带货数据。",
-        "sites": ["kuaishou.com", "gifshow.com"],
-        "keyword": "快手",
-        "searchLabel": "快手公开网页线索",
-        "authorizationChannel": "快手开放平台 / 磁力引擎（开发者资质 + 账号授权）",
-    },
-    # ---- 需求与内容侧（海外）----
+    # ---- 需求与内容侧 ----
     "google_trends": {
         "id": "google_trends",
         "name": "Google Trends",
-        "role": "demand",
+        "roles": ["demand"],
         "region": "海外",
         "access": "web_search",
         "capabilities": ["public_trend_mentions", "keyword_discovery"],
@@ -67,7 +45,7 @@ PLATFORMS = {
     "tiktok": {
         "id": "tiktok",
         "name": "TikTok / Creative Center",
-        "role": "demand",
+        "roles": ["demand"],
         "region": "海外",
         "access": "web_search",
         "capabilities": ["public_trend_mentions", "creative_discovery"],
@@ -75,57 +53,112 @@ PLATFORMS = {
         "note": "TikTok Research API 仅面向符合条件且获批的研究用途，不作为商业默认数据源。",
         "sites": ["tiktok.com"],
         "keyword": "TikTok",
-        "searchLabel": "TikTok / 抖音公开网页线索",
+        "searchLabel": "TikTok / Creative Center 公开网页线索",
         "authorizationChannel": "TikTok Research API / 商业账号授权",
     },
-    # ---- 销售市场侧 ----
-    "amazon_jp": {
-        "id": "amazon_jp",
-        "name": "Amazon.co.jp",
-        "role": "sales",
-        "region": "海外",
-        "access": "authorization_required",
-        "capabilities": ["catalog_match", "authorized_listing_data", "authorized_pricing"],
-        "accessText": "公开页面可通过搜索发现；正式商品与定价数据需要 SP-API 开发者注册和卖家/供应商授权",
-        "note": "目录匹配和卖家定价权限分属不同 API 能力，不能视为公开全站价格接口。",
-        "sites": ["amazon.co.jp"],
-        "keyword": "Amazon.co.jp",
-        "searchLabel": "Amazon.co.jp 商品/竞品搜索",
-        "authorizationChannel": "Amazon SP-API（开发者注册 + 角色授权）",
-    },
-    "rakuten_yahoo_jp": {
-        "id": "rakuten_yahoo_jp",
-        "name": "乐天 / Yahoo! Shopping",
-        "role": "sales",
-        "region": "海外",
+    # ---- 国内内容侧 + 自有店铺 ----
+    "douyin": {
+        "id": "douyin",
+        "name": "抖音",
+        "roles": ["demand", "sales"],
+        "region": "国内",
         "access": "web_search",
-        "capabilities": ["public_listing_mentions"],
-        "accessText": "MiniMax Web Search 搜索公开商品页面；价格、库存和销量仍需授权 API 或页面复核",
-        "note": "公开搜索摘要用于发现和初筛，不代表当前可购买价格或真实销量。",
-        "sites": ["rakuten.co.jp", "rakuten.com", "shopping.yahoo.co.jp"],
-        "keyword": "楽天 Yahoo!ショッピング",
-        "searchLabel": "乐天 / Yahoo! Shopping 搜索线索",
-        "authorizationChannel": "各平台官方 API / 开放平台应用",
+        "capabilities": ["public_trend_mentions", "content_discovery", "public_storefront_mentions"],
+        "accessText": "MiniMax Web Search 搜索公开页面；热点榜、视频数据与商城商品数据需抖音开放平台应用与对应 scope",
+        "note": "官方开放平台把热点、视频与电商能力拆成不同接口，未授权前只有公开页面文案可用。",
+        "sites": ["douyin.com"],
+        "keyword": "抖音",
+        "searchLabel": "抖音公开网页线索",
+        "authorizationChannel": "抖音开放平台（应用创建 + OAuth + 对应 scope）",
+        "sales_market": "中国",
+        "supply_market": "",
     },
-    "mercari_jp": {
-        "id": "mercari_jp",
-        "name": "Mercari Japan",
-        "role": "sales",
-        "region": "海外",
+    "kuaishou": {
+        "id": "kuaishou",
+        "name": "快手",
+        "roles": ["demand", "sales"],
+        "region": "国内",
+        "access": "web_search",
+        "capabilities": ["public_trend_mentions", "content_discovery", "public_storefront_mentions"],
+        "accessText": "MiniMax Web Search 搜索公开页面；直播与广告投放数据需快手开放平台 / 磁力引擎资质授权",
+        "note": "公开页面线索不等于官方热榜、直播成交或达人带货数据。",
+        "sites": ["kuaishou.com", "gifshow.com"],
+        "keyword": "快手",
+        "searchLabel": "快手公开网页线索",
+        "authorizationChannel": "快手开放平台 / 磁力引擎（开发者资质 + 账号授权）",
+        "sales_market": "中国",
+        "supply_market": "",
+    },
+    # ---- 中国销售与货源双角色平台 ----
+    "taobao": {
+        "id": "taobao",
+        "name": "淘宝 / 天猫",
+        "roles": ["sourcing", "sales"],
+        "region": "国内",
+        "access": "web_search",
+        "capabilities": ["public_offer_mentions", "public_listing_mentions", "authorized_account_data", "manual_url_import"],
+        "accessText": "MiniMax Web Search 搜索公开商品页；正式商品与店铺数据需淘宝开放平台按场景授权",
+        "note": "官方 taobao.products.search 文档说明该接口不是全站商品搜索接口，授权后也要按应用类型核对范围。",
+        "sites": ["taobao.com", "tmall.com"],
+        "keyword": "淘宝 天猫",
+        "searchLabel": "淘宝 / 天猫货源搜索",
+        "authorizationChannel": "淘宝开放平台（应用 + 场景授权）",
+        "sales_market": "中国",
+        "supply_market": "中国",
+    },
+    "jd": {
+        "id": "jd",
+        "name": "京东",
+        "roles": ["sourcing", "sales"],
+        "region": "国内",
+        "access": "web_search",
+        "capabilities": ["public_offer_mentions", "public_listing_mentions", "authorized_catalog_or_seller_data"],
+        "accessText": "MiniMax Web Search 搜索公开商品页；正式数据需从京东零售开放平台按应用类型核对接口范围",
+        "note": "旧平台与业务子平台（POP、自营、拍拍等）接口不同，不能假设为通用消费者商品搜索。",
+        "sites": ["jd.com"],
+        "keyword": "京东",
+        "searchLabel": "京东货源搜索",
+        "authorizationChannel": "京东零售开放平台 open.jd.com（应用类型 + 接口授权）",
+        "sales_market": "中国",
+        "supply_market": "中国",
+    },
+    "pdd": {
+        "id": "pdd",
+        "name": "拼多多",
+        "roles": ["sourcing", "sales"],
+        "region": "国内",
+        "access": "web_search",
+        "capabilities": ["public_offer_mentions", "public_listing_mentions", "authorized_marketing_data"],
+        "accessText": "MiniMax Web Search 搜索公开页面；商品与营销数据需拼多多开放平台主体资质与对应权限",
+        "note": "公开页面多为营销页，零售低价不等于可复制的源头成本；销量口径需另行核实。",
+        "sites": ["pinduoduo.com", "yangkeduo.com"],
+        "keyword": "拼多多",
+        "searchLabel": "拼多多货源搜索",
+        "authorizationChannel": "拼多多开放平台（主体资质 + 接口权限）",
+        "sales_market": "中国",
+        "supply_market": "中国",
+    },
+    "xianyu": {
+        "id": "xianyu",
+        "name": "闲鱼（个人二手）",
+        "roles": ["sales"],
+        "region": "国内",
         "access": "web_search",
         "capabilities": ["public_listing_mentions", "second_hand_price_context"],
-        "accessText": "MiniMax Web Search 搜索公开商品页；账号与交易数据需平台授权",
-        "note": "个人闲置与代卖平台，标价是二手/个人定价，只作价格背景，不等于新品可复制的定价。",
-        "sites": ["mercari.com"],
-        "keyword": "Mercari",
-        "searchLabel": "Mercari Japan 二手价格线索",
-        "authorizationChannel": "Mercari 官方 API / 商业合作（不作为默认数据源）",
+        "accessText": "MiniMax Web Search 搜索公开商品页；个人账号与成交数据不可得",
+        "note": "个人闲置与代卖平台，价格是二手/个人定价，只作价格带背景，不等于一手进货价。",
+        "sites": ["xianyu.com", "goofish.com"],
+        "keyword": "闲鱼",
+        "searchLabel": "闲鱼二手价格线索",
+        "authorizationChannel": "闲鱼开放平台（当前无通用商品搜索接口）",
+        "sales_market": "中国",
+        "supply_market": "",
     },
-    # ---- 货源侧（国内电商）----
+    # ---- 货源侧 ----
     "1688": {
         "id": "1688",
         "name": "1688",
-        "role": "sourcing",
+        "roles": ["sourcing"],
         "region": "国内",
         "access": "authorization_required",
         "capabilities": ["supplier_search", "offer_detail", "quote_capture"],
@@ -135,53 +168,13 @@ PLATFORMS = {
         "keyword": "1688",
         "searchLabel": "1688 供应链搜索",
         "authorizationChannel": "1688 开放平台（应用 + 买家授权 + 接口权限）",
-    },
-    "taobao": {
-        "id": "taobao",
-        "name": "淘宝 / 天猫",
-        "role": "sourcing",
-        "region": "国内",
-        "access": "web_search",
-        "capabilities": ["public_offer_mentions", "authorized_account_data", "manual_url_import"],
-        "accessText": "MiniMax Web Search 搜索公开商品页；正式商品与店铺数据需淘宝开放平台按场景授权",
-        "note": "官方 taobao.products.search 文档说明该接口不是全站商品搜索接口，授权后也要按应用类型核对范围。",
-        "sites": ["taobao.com", "tmall.com"],
-        "keyword": "淘宝 天猫",
-        "searchLabel": "淘宝 / 天猫货源搜索",
-        "authorizationChannel": "淘宝开放平台（应用 + 场景授权）",
-    },
-    "jd": {
-        "id": "jd",
-        "name": "京东",
-        "role": "sourcing",
-        "region": "国内",
-        "access": "web_search",
-        "capabilities": ["public_offer_mentions", "authorized_catalog_or_seller_data"],
-        "accessText": "MiniMax Web Search 搜索公开商品页；正式数据需从京东零售开放平台按应用类型核对接口范围",
-        "note": "旧平台与业务子平台（POP、自营、拍拍等）接口不同，不能假设为通用消费者商品搜索。",
-        "sites": ["jd.com"],
-        "keyword": "京东",
-        "searchLabel": "京东货源搜索",
-        "authorizationChannel": "京东零售开放平台 open.jd.com（应用类型 + 接口授权）",
-    },
-    "pdd": {
-        "id": "pdd",
-        "name": "拼多多",
-        "role": "sourcing",
-        "region": "国内",
-        "access": "web_search",
-        "capabilities": ["public_offer_mentions", "authorized_marketing_data"],
-        "accessText": "MiniMax Web Search 搜索公开页面；商品与营销数据需拼多多开放平台主体资质与对应权限",
-        "note": "公开页面多为营销页，零售低价不等于可复制的源头成本；销量口径需另行核实。",
-        "sites": ["pinduoduo.com", "yangkeduo.com"],
-        "keyword": "拼多多",
-        "searchLabel": "拼多多货源搜索",
-        "authorizationChannel": "拼多多开放平台（主体资质 + 接口权限）",
+        "sales_market": "",
+        "supply_market": "中国",
     },
     "yiwugo": {
         "id": "yiwugo",
         "name": "义乌购 / 中国商品网",
-        "role": "sourcing",
+        "roles": ["sourcing"],
         "region": "国内",
         "access": "web_search",
         "capabilities": ["public_offer_mentions", "wholesale_market_context"],
@@ -191,21 +184,73 @@ PLATFORMS = {
         "keyword": "义乌购 中国商品网",
         "searchLabel": "义乌购 / 中国商品网货源搜索",
         "authorizationChannel": "义乌购 / 中国商品网开放平台（主体资质 + 接口权限）",
+        "sales_market": "",
+        "supply_market": "中国",
     },
-    # ---- 其他已登记平台 ----
+    # ---- 日本与海外销售市场 ----
+    "amazon_jp": {
+        "id": "amazon_jp",
+        "name": "Amazon.co.jp",
+        "roles": ["sales", "sourcing"],
+        "region": "海外",
+        "access": "authorization_required",
+        "capabilities": ["catalog_match", "authorized_listing_data", "authorized_pricing"],
+        "accessText": "公开页面可通过搜索发现；正式商品与定价数据需要 SP-API 开发者注册和卖家/供应商授权",
+        "note": "目录匹配和卖家定价权限分属不同 API 能力，不能视为公开全站价格接口。",
+        "sites": ["amazon.co.jp"],
+        "keyword": "Amazon.co.jp",
+        "searchLabel": "Amazon.co.jp 商品/竞品搜索",
+        "authorizationChannel": "Amazon SP-API（开发者注册 + 角色授权）",
+        "sales_market": "日本",
+        "supply_market": "日本",
+    },
+    "rakuten_yahoo_jp": {
+        "id": "rakuten_yahoo_jp",
+        "name": "乐天 / Yahoo! Shopping",
+        "roles": ["sales", "sourcing"],
+        "region": "海外",
+        "access": "web_search",
+        "capabilities": ["public_listing_mentions"],
+        "accessText": "MiniMax Web Search 搜索公开商品页面；价格、库存和销量仍需授权 API 或页面复核",
+        "note": "公开搜索摘要用于发现和初筛，不代表当前可购买价格或真实销量。",
+        "sites": ["rakuten.co.jp", "rakuten.com", "shopping.yahoo.co.jp"],
+        "keyword": "楽天 Yahoo!ショッピング",
+        "searchLabel": "乐天 / Yahoo! Shopping 搜索线索",
+        "authorizationChannel": "各平台官方 API / 开放平台应用",
+        "sales_market": "日本",
+        "supply_market": "日本",
+    },
+    "mercari_jp": {
+        "id": "mercari_jp",
+        "name": "Mercari Japan",
+        "roles": ["sales", "sourcing"],
+        "region": "海外",
+        "access": "web_search",
+        "capabilities": ["public_listing_mentions", "second_hand_price_context"],
+        "accessText": "MiniMax Web Search 搜索公开商品页；账号与交易数据需平台授权",
+        "note": "个人闲置与代卖平台，标价是二手/个人定价，只作价格背景，不等于新品可复制的定价。",
+        "sites": ["mercari.com"],
+        "keyword": "Mercari",
+        "searchLabel": "Mercari Japan 二手价格线索",
+        "authorizationChannel": "Mercari 官方 API / 商业合作（不作为默认数据源）",
+        "sales_market": "日本",
+        "supply_market": "日本",
+    },
     "tiktok_shop": {
         "id": "tiktok_shop",
         "name": "TikTok Shop",
-        "role": "sales",
+        "roles": ["sales", "sourcing"],
         "region": "海外",
         "access": "authorization_required",
         "capabilities": ["authorized_shop_products", "creator_showcase"],
         "accessText": "需要开发者应用、店铺或达人授权及接口 scope",
         "note": "官方接口范围绑定获授权店铺/达人上下文，不作为全站热销榜接口。",
-        "sites": [],
+        "sites": ["shop.tiktok.com"],
         "keyword": "TikTok Shop",
         "searchLabel": "TikTok Shop",
         "authorizationChannel": "TikTok Shop 开放平台（店铺/达人授权）",
+        "sales_market": "海外",
+        "supply_market": "海外",
     },
 }
 
@@ -216,18 +261,102 @@ ROLE_LABELS = {
     "sourcing": "货源侧",
 }
 
+MARKET_LABELS = {
+    "中国": "国内市场",
+    "日本": "日本市场",
+    "海外": "海外市场",
+}
+
+# Markets the agent can sell into.  The order is the order shown in the UI.
+MARKETS = ["日本", "中国", "海外"]
+
 
 def platform_catalog() -> list[dict]:
     """Public metadata for every registered platform."""
-    return [dict(item, roleLabel=ROLE_LABELS.get(item["role"], item["role"])) for item in PLATFORMS.values()]
+    return [
+        dict(
+            item,
+            roleLabel=" / ".join(ROLE_LABELS.get(role, role) for role in item["roles"]),
+            salesMarketLabel=MARKET_LABELS.get(item.get("sales_market", ""), ""),
+            supplyMarketLabel=MARKET_LABELS.get(item.get("supply_market", ""), ""),
+        )
+        for item in PLATFORMS.values()
+    ]
 
 
 def platforms_by_role(role: str) -> list[dict]:
-    return [dict(item) for item in PLATFORMS.values() if item["role"] == role]
+    return [dict(item) for item in PLATFORMS.values() if role in item["roles"]]
 
 
 def platform_ids_by_role(role: str) -> list[str]:
-    return [item["id"] for item in PLATFORMS.values() if item["role"] == role]
+    return [item["id"] for item in PLATFORMS.values() if role in item["roles"]]
+
+
+def sales_channels(market: str) -> list[dict]:
+    """Platforms that sell into the given market."""
+    return [
+        dict(item)
+        for item in PLATFORMS.values()
+        if "sales" in item["roles"] and item.get("sales_market") == market
+    ]
+
+
+def supply_channels(market: str) -> list[dict]:
+    """Platforms that supply goods from the given market."""
+    return [
+        dict(item)
+        for item in PLATFORMS.values()
+        if "sourcing" in item["roles"] and item.get("supply_market") == market
+    ]
+
+
+def supply_markets() -> list[str]:
+    """Markets that actually have supply platforms registered."""
+    seen: list[str] = []
+    for item in PLATFORMS.values():
+        market = item.get("supply_market", "")
+        if market and "sourcing" in item["roles"] and market not in seen:
+            seen.append(market)
+    return seen
+
+
+def default_platform_for_market(market: str) -> str:
+    """The platform the operator most likely means for a given market."""
+    channels = sales_channels(market)
+    if not channels:
+        return ""
+    preferred = {"日本": "amazon_jp", "中国": "taobao", "海外": "tiktok_shop"}.get(market)
+    for item in channels:
+        if item["id"] == preferred:
+            return item["name"]
+    return channels[0]["name"]
+
+
+def platform_dimension(platform_id: str, target_market: str, source_country: str) -> str:
+    """Classify a platform for the current research scope.
+
+    The same platform can play different roles: 淘宝 is a Japan competitor
+    when the target market is China and a domestic supply reference when the
+    goods come from China.  The dimension follows the platform's actual
+    market, not the search intent.
+    """
+    platform = PLATFORMS.get(platform_id)
+    if not platform:
+        return ""
+    roles = platform["roles"]
+    sales_market = platform.get("sales_market", "")
+    supply_market = platform.get("supply_market", "")
+    if "sales" in roles and sales_market == target_market:
+        return "competition"
+    if "sourcing" in roles and supply_market and supply_market == source_country:
+        return "sourcing"
+    if "demand" in roles:
+        return "demand"
+    if "sales" in roles:
+        return "competition"
+    if "sourcing" in roles:
+        return "sourcing"
+    return ""
 
 
 def site_filter(platform_ids: list[str]) -> str:
@@ -247,19 +376,19 @@ def site_filter(platform_ids: list[str]) -> str:
     return " OR ".join(f"site:{site}" for site in sites)
 
 
-def sourcing_platform_options() -> list[dict]:
-    """Domestic supply platforms an operator can pick as a sourcing preference."""
+def sourcing_platform_options(market: str = "中国") -> list[dict]:
+    """Supply platforms an operator can pick as a sourcing preference."""
     return [
         {"id": item["id"], "name": item["name"], "note": item["note"], "searchLabel": item["searchLabel"]}
         for item in PLATFORMS.values()
-        if item["role"] == "sourcing" and item["region"] == "国内"
+        if "sourcing" in item["roles"] and item.get("supply_market") == market
     ]
 
 
 def platform_for_url(url: str) -> dict | None:
     """Identify the platform a result actually came from.
 
-    Search backends treat ``site:`` as a hint, not a filter, so a query aimed at
+    Search backends treat `site:` as a hint, not a filter, so a query aimed at
     one platform can return pages from another. Evidence must be labelled by the
     host it actually came from, never by the platform we asked for.
     """
@@ -271,6 +400,11 @@ def platform_for_url(url: str) -> dict | None:
     for item in PLATFORMS.values():
         for site in item.get("sites", []):
             if site in lowered and len(site) > best_length:
-                best = {"id": item["id"], "name": item["name"], "role": item["role"], "region": item["region"]}
+                best = {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "roles": item["roles"],
+                    "region": item["region"],
+                }
                 best_length = len(site)
     return best

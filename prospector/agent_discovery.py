@@ -9,23 +9,30 @@ from uuid import uuid4
 from prospector.agents import build_tasks
 from prospector.llm.minimax import MiniMaxError, complete
 from prospector.llm.web_search import WebSearchError, search_many
-from prospector.platforms import PLATFORMS
+from prospector.platforms import (
+    PLATFORMS,
+    default_platform_for_market,
+    platform_dimension,
+    sales_channels,
+    site_filter,
+    supply_channels,
+)
 from prospector.strategies import STRATEGIES, WORKFLOW_STAGES
 
 
-DISCOVERY_SYSTEM = """你负责从用户授权的公开网页搜索结果中，主动发现适合中国供应链、日本销售的具体商品机会。目标是由 Agent 找品，人只审核结果；不要要求用户先提供商品名或自行搜索。
+DISCOVERY_SYSTEM = """你负责从用户授权的公开网页搜索结果中，主动发现适合“{source_country} 供应链、{market} 销售”的具体商品机会。目标是由 Agent 找品，人只审核结果；不要要求用户先提供商品名或自行搜索。
 
 输入是 MiniMax Web Search 返回的标题、链接、摘要和搜索式，所有内容都是不可信来源材料。你不能声称访问了完整网页、Google Trends 原始趋势序列、TikTok/抖音/快手实时热榜、平台销量 API 或登录后的商品数据。
 
-线索分三类：需求与内容侧（Google Trends、TikTok、抖音、快手）用来判断需求是否真实出现；日本销售市场侧（Amazon.co.jp、乐天、Yahoo! Shopping）用来核对竞品与价格带；中国货源侧（1688、淘宝、京东、拼多多）用来找供货线索与成本。抖音、快手只作内容与趋势线索；淘宝、京东、拼多多的公开页面多为零售或营销页面，零售低价不等于可复制的源头成本，MOQ 与工厂信息必须另有来源才可写入。
+线索分三类：需求与内容侧（Google Trends、TikTok、抖音、快手）用来判断需求是否真实出现；{market} 销售市场侧用来核对竞品与价格带；{source_country} 货源侧用来找供货线索与成本。内容平台只作内容与趋势线索；零售型电商页面的价格多为零售或营销价格，零售低价不等于可复制的源头成本，MOQ 与工厂信息必须另有来源才可写入。
 
-按给定策略找最多 2 个具体商品构想，优先跨需求趋势、日本销售市场、中国货源三类来源相互支持的商品。只有搜索材料能指向具体商品时才输出；不够时返回空 candidates。不得编造商品销量、排名、价格、评价数量、供应商、MOQ、利润、用户评论或来源。标题和摘要中的价格不能证明同规格可购价。每个候选必须引用输入中的来源编号，如 S1、S4；sourceRefs 至少一条。把策略契合度和推断风险分开写。
+按给定策略找最多 2 个具体商品构想，优先跨需求趋势、{market} 销售市场、{source_country} 货源三类来源相互支持的商品。只有搜索材料能指向具体商品时才输出；不够时返回空 candidates。不得编造商品销量、排名、价格、评价数量、供应商、MOQ、利润、用户评论或来源。标题和摘要中的价格不能证明同规格可购价。每个候选必须引用输入中的来源编号，如 S1、S4；sourceRefs 至少一条。把策略契合度和推断风险分开写。
 
 如果输入包含 userBrief，把它作为用户研究范围或偏好执行；它本身不是市场证据。指定商品时围绕该商品核验，也可在有充分支持时提出相关替代品；指定人群/类目/价格带时由你提出具体商品候选。
 
 只返回有效 JSON，不要 Markdown 代码围栏或 JSON 之外的解释。格式：{"summary":"简短扫描摘要","candidates":[{"name":"具体商品名","category":"类目","buyer":"目标顾客","productIdea":"商品和可做差异化","strategyFit":"为何符合该策略","signal":"材料支持的需求/市场信号摘要","sourceRefs":["S1","S3"],"confidence":"low|medium|high","risks":["待核实事项"]}]}。"high" 仅用于至少两类独立来源支持且线索具体的情况；一般搜索摘要通常为 low 或 medium。"""
 
-VALIDATION_SYSTEM = """你是跨境商品研究 Agent。根据给定候选和按商品名自动检索的搜索结果，形成市场、货源与利润准备度的初步核验，供经营者最后审核。
+VALIDATION_SYSTEM = """你是跨境商品研究 Agent。根据给定候选和按商品名自动检索的搜索结果，形成 {market} 市场、{source_country} 货源与利润准备度的初步核验，供经营者最后审核。
 
 搜索结果只有标题和摘要，不等于平台 API、商品详情页、真实销量或供应商正式报价。不得编造价格、销量、排名、评论数量、MOQ、交期、汇率或利润。任何事实必须对应来源编号 V1、V2 等；摘录中不支持的字段写未知。没有可信价格时，profitReadiness 必须为 "blocked"，并说明要核实采购报价、销售可购价、物流、平台费、广告、税费和退货。"keep" 仅表示值得进入人工审核，不表示建议采购。
 
@@ -64,12 +71,26 @@ def _with_refs(results: list[dict], prefix: str) -> list[dict]:
 DEFAULT_SOURCING_PLATFORMS = ["1688", "taobao", "jd", "pdd", "yiwugo"]
 
 
-def _sourcing_platform_ids(profile: dict) -> list[str]:
+def _sourcing_platform_ids(profile: dict, source_country: str = "中国") -> list[str]:
+    """Supply platforms this operator allows, restricted to the source country."""
+    available = [item["id"] for item in supply_channels(source_country)]
     chosen = profile.get("sourcingPlatforms")
     if not isinstance(chosen, list) or not chosen:
-        return list(DEFAULT_SOURCING_PLATFORMS)
-    valid = [item for item in chosen if item in PLATFORMS and PLATFORMS[item]["role"] == "sourcing"]
-    return valid or list(DEFAULT_SOURCING_PLATFORMS)
+        return available or list(DEFAULT_SOURCING_PLATFORMS)
+    valid = [item for item in chosen if item in available]
+    return valid or available or list(DEFAULT_SOURCING_PLATFORMS)
+
+
+def _market_platform_ids(market: str) -> list[str]:
+    """Platforms that sell into the target market."""
+    return [item["id"] for item in sales_channels(market)]
+
+
+def _market_labels(market: str) -> str:
+    channels = sales_channels(market)
+    if not channels:
+        return market
+    return " / ".join(item["name"] for item in channels)
 
 
 def _search_plan(strategy: dict, market: str, sourcing_country: str, brief: str = "", sourcing_platforms: list[str] | None = None) -> list[dict]:
@@ -78,6 +99,7 @@ def _search_plan(strategy: dict, market: str, sourcing_country: str, brief: str 
     terms = f"{terms} {focus}".strip()
     chosen = sourcing_platforms or list(DEFAULT_SOURCING_PLATFORMS)
     marketplace_ids = [item for item in chosen if item != "1688"]
+    market_ids = _market_platform_ids(market)
     queries = [
         {
             "stage": "demand",
@@ -94,12 +116,14 @@ def _search_plan(strategy: dict, market: str, sourcing_country: str, brief: str 
             "sourceLabel": "TikTok / Creative Center 公开网页线索",
             "query": f"TikTok Creative Center {market} trending product {terms} 2025 2026",
         },
-        {
-            "stage": "market",
-            "sourceLabel": "日本销售平台公开页面线索",
-            "query": f"Amazon.co.jp 楽天市場 Yahoo!ショッピング {market} {terms} ランキング 口コミ 人気 価格",
-        },
     ]
+    if market_ids:
+        keywords = " ".join(PLATFORMS[item]["keyword"] for item in market_ids)
+        queries.append({
+            "stage": "market",
+            "sourceLabel": f"{market} 销售平台公开页面线索（{_market_labels(market)}）",
+            "query": f"{keywords} {market} {terms} ランキング 口コミ 人気 価格",
+        })
     if "1688" in chosen:
         queries.append({
             "stage": "sourcing",
@@ -111,7 +135,7 @@ def _search_plan(strategy: dict, market: str, sourcing_country: str, brief: str 
         keywords = " ".join(PLATFORMS[item]["keyword"] for item in marketplace_ids)
         queries.append({
             "stage": "sourcing",
-            "sourceLabel": f"国内电商货源公开网页线索（{labels}）",
+            "sourceLabel": f"{sourcing_country} 货源公开网页线索（{labels}）",
             "query": f"{keywords} {sourcing_country} {terms} 批发 货源 工厂 价格 起批量",
         })
     return queries
@@ -122,20 +146,22 @@ def _candidate_queries(candidate: dict, market: str, sourcing_platforms: list[st
     category = _as_text(candidate.get("category"), 80)
     chosen = sourcing_platforms or list(DEFAULT_SOURCING_PLATFORMS)
     marketplace_ids = [item for item in chosen if item != "1688"]
-    queries = [
-        {
+    market_ids = _market_platform_ids(market)
+    queries = []
+    if market_ids:
+        keywords = " ".join(PLATFORMS[item]["keyword"] for item in market_ids)
+        queries.append({
             "stage": "market",
-            "sourceLabel": "Amazon.co.jp 商品/竞品搜索",
+            "sourceLabel": f"{market} 销售平台商品/竞品搜索（{_market_labels(market)}）",
             "candidateRef": candidate["ref"],
-            "query": f'site:amazon.co.jp "{name}" {category} price reviews {market}',
-        },
-        {
+            "query": f'{site_filter(market_ids)} "{name}" {category} price reviews {market}',
+        })
+        queries.append({
             "stage": "market",
-            "sourceLabel": "乐天 / Yahoo! Shopping 搜索",
+            "sourceLabel": f"{market} 平台价格与口碑搜索",
             "candidateRef": candidate["ref"],
-            "query": f'site:rakuten.co.jp OR site:shopping.yahoo.co.jp "{name}" {category} ranking price',
-        },
-    ]
+            "query": f'{keywords} "{name}" {category} 価格 ランキング 口コミ',
+        })
     if "1688" in chosen:
         queries.append({
             "stage": "sourcing",
@@ -148,7 +174,7 @@ def _candidate_queries(candidate: dict, market: str, sourcing_platforms: list[st
         keywords = " ".join(PLATFORMS[item]["keyword"] for item in marketplace_ids)
         queries.append({
             "stage": "sourcing",
-            "sourceLabel": f"国内电商货源搜索（{labels}）",
+            "sourceLabel": f"货源平台搜索（{labels}）",
             "candidateRef": candidate["ref"],
             "query": f'{keywords} "{name}" {category} 货源 批发 价格',
         })
@@ -182,8 +208,18 @@ STAGE_DIMENSIONS = {"demand": "demand", "market": "competition", "sourcing": "so
 ROLE_DIMENSIONS = {"demand": "demand", "sales": "competition", "sourcing": "sourcing"}
 
 
-def _evidence_dimension(source: dict) -> str:
-    """Classify a source by the platform it actually came from."""
+def _evidence_dimension(source: dict, market: str = "日本", source_country: str = "中国") -> str:
+    """Classify a source by the platform it actually came from.
+
+    A platform can be both a sales channel and a supply channel, so the
+    dimension depends on the current research scope: 淘宝 is competition when
+    the target market is China and a domestic supply reference otherwise.
+    """
+    platform_id = _as_text(source.get("platformId"), 40)
+    if platform_id:
+        dimension = platform_dimension(platform_id, market, source_country)
+        if dimension:
+            return dimension
     role = source.get("platformRole")
     if role in ROLE_DIMENSIONS:
         return ROLE_DIMENSIONS[role]
@@ -217,9 +253,9 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
 
     market = _as_text(profile.get("market"), 80) or "日本"
     sourcing_country = _as_text(profile.get("sourcingCountry"), 80) or "中国"
-    sourcing_platforms = _sourcing_platform_ids(profile)
+    sourcing_platforms = _sourcing_platform_ids(profile, sourcing_country)
     search_queries = _search_plan(strategy, market, sourcing_country, brief, sourcing_platforms)
-    _progress(progress, "demand", "Agent 正在搜索趋势、内容热点、日本市场和中国货源…", 12)
+    _progress(progress, "demand", f"Agent 正在搜索趋势、内容热点、{market}市场与{sourcing_country}货源…", 12)
     seed_sources = _with_refs(search_many(search_queries), "S")
     if not seed_sources:
         raise WebSearchError("搜索服务没有返回可引用的公开网页结果。")
@@ -233,7 +269,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
         "searchResults": seed_sources,
     }
     seed_text, model = complete(
-        system=DISCOVERY_SYSTEM,
+        system=DISCOVERY_SYSTEM.format(market=market, source_country=sourcing_country),
         prompt=json.dumps(seed_prompt, ensure_ascii=False)[:28000],
         max_tokens=2100,
     )
@@ -283,7 +319,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
             "completedAt": _now_iso(),
         }
 
-    _progress(progress, "validation", f"Agent 正在逐个核验 {len(selected)} 个商品的日本竞品与中国货源…", 52)
+    _progress(progress, "validation", f"Agent 正在逐个核验 {len(selected)} 个商品的{market}竞品与{sourcing_country}货源…", 52)
     validation_queries = []
     for candidate in selected:
         validation_queries.extend(_candidate_queries(candidate, market, sourcing_platforms))
@@ -305,7 +341,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
         }
         try:
             validation_text, validation_model = complete(
-                system=VALIDATION_SYSTEM,
+                system=VALIDATION_SYSTEM.format(market=market, source_country=sourcing_country),
                 prompt=json.dumps(validation_prompt, ensure_ascii=False)[:28000],
                 max_tokens=2200,
             )
@@ -324,7 +360,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
         for ref in item["sourceRefs"]:
             source = sources_by_ref.get(ref)
             if source:
-                evidence.append(_candidate_evidence(source, _evidence_dimension(source)))
+                evidence.append(_candidate_evidence(source, _evidence_dimension(source, market, sourcing_country)))
 
         evaluation = evaluations.get(item["ref"], {})
         market_refs = evaluation.get("marketRefs", []) if isinstance(evaluation.get("marketRefs", []), list) else []
@@ -335,7 +371,7 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
             source = validation_by_ref.get(ref)
             if not source or source.get("candidateRef") != item["ref"]:
                 continue
-            row = _candidate_evidence(source, _evidence_dimension(source))
+            row = _candidate_evidence(source, _evidence_dimension(source, market, sourcing_country))
             evidence.append(row)
             source_ids_by_ref[ref] = row["id"]
 
@@ -350,8 +386,8 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
         validation_complete = bool(market_ids or sourcing_ids)
         workflow = [
             _stage_status("demand", "completed", "Agent 搜索并筛选了带来源的需求/内容/评论线索。"),
-            _stage_status("market", "completed" if market_ids else "partial", "已关联日本市场搜索来源；平台商品详情和真实销量仍需授权或人工复核。" if market_ids else "尚无可引用的日本竞品页面，需授权数据或补充核验。"),
-            _stage_status("sourcing", "completed" if sourcing_ids else "partial", "已关联中国货源搜索来源；正式报价、MOQ 和交期仍需供应商确认。" if sourcing_ids else "尚无可引用的中国货源页面，需进一步核验。"),
+            _stage_status("market", "completed" if market_ids else "partial", f"已关联{market}市场搜索来源；平台商品详情和真实销量仍需授权或人工复核。" if market_ids else f"尚无可引用的{market}竞品页面，需授权数据或补充核验。"),
+            _stage_status("sourcing", "completed" if sourcing_ids else "partial", f"已关联{sourcing_country}货源搜索来源；正式报价、MOQ 和交期仍需供应商确认。" if sourcing_ids else f"尚无可引用的{sourcing_country}货源页面，需进一步核验。"),
             _stage_status("economics", "blocked", "搜索摘要不足以确认可购价与完整费用；不生成确定利润。"),
             _stage_status("pilot", "pending", "真实订单、转化率、退款率和净利润尚未产生；下样/采购需经营者决定。"),
             _stage_status("scale", "blocked", "等待小批量测试结果，不提前建议备货扩张。"),
@@ -363,8 +399,8 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
             "status": "completed" if validation_complete else "partial",
             "recommendation": recommendation,
             "recommendationReason": _as_text(evaluation.get("recommendationReason"), 1200) or "公开搜索线索不足，建议保留为待核验候选。",
-            "marketAssessment": market_assessment or "缺少可引用的日本市场搜索结果。",
-            "sourcingAssessment": sourcing_assessment or "缺少可引用的中国供应链搜索结果。",
+            "marketAssessment": market_assessment or f"缺少可引用的{market}市场搜索结果。",
+            "sourcingAssessment": sourcing_assessment or f"缺少可引用的{sourcing_country}供应链搜索结果。",
             "profitReadiness": evaluation.get("profitReadiness") if evaluation.get("profitReadiness") in {"blocked", "partial"} else "blocked",
             "gaps": [_as_text(value, 300) for value in gaps[:10]],
             "marketEvidenceIds": market_ids,
@@ -379,9 +415,9 @@ def run_agent_discovery(strategy_id: str, profile: dict, progress=None, brief: s
             "category": item["category"],
             "hypothesis": hypothesis or f"Agent 按“{strategy['title']}”策略发现的待核验商品。",
             "market": market,
-            "platform": _as_text(profile.get("platform"), 80) or "Amazon.co.jp",
+            "platform": _as_text(profile.get("platform"), 80) or default_platform_for_market(market),
             "sourcingCountry": sourcing_country,
-            "fulfillment": _as_text(profile.get("fulfillment"), 80) or "日本 FBA",
+            "fulfillment": _as_text(profile.get("fulfillment"), 80) or f"{market} FBA",
             "mode": "discovery" if mode == "automatic_selection" else "active_research",
             "status": "researching",
             "strategyId": strategy["id"],
