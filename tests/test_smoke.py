@@ -485,6 +485,62 @@ class ServerSmokeTest(unittest.TestCase):
         delivery = next(item for item in candidate["purchaseChecklist"] if item["id"] == f"po_{po['id']}_delivery")
         self.assertTrue(delivery["done"])
 
+    def test_actual_cost_update_writes_assumptions_and_evidence(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "cost-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "OPPO K13s 12G+256G",
+                "category": "电子",
+                "hypothesis": "到货成本回填",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "中国",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {"sellingPrice": 2099, "sellingCurrency": "CNY"},
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "purchaseChecklist": [{"id": "po_x_actual", "item": "录入实际到货数量与总成本", "status": "待执行", "done": False}],
+                "workflowStages": [{"id": "sourcing", "number": 3, "title": "寻找货源", "status": "partial", "note": ""}],
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, payload = _post(
+            f"{self.base}/api/candidates/{candidate_id}",
+            {
+                "actualCost": {
+                    "quantity": 60,
+                    "unitPrice": 1820,
+                    "purchaseCurrency": "CNY",
+                    "shippingTotal": 600,
+                    "dutyTotal": 300,
+                    "insuranceTotal": 60,
+                    "defectRate": 0.02,
+                    "receivedAt": "2026-11-15",
+                    "qcChecks": ["外包装完好无破损"],
+                }
+            },
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["assumptions"]["purchasePrice"], 1820)
+        self.assertEqual(payload["assumptions"]["purchaseCurrency"], "CNY")
+        self.assertEqual(payload["assumptions"]["inboundCost"], 11.0)
+        self.assertEqual(payload["assumptions"]["dutyTaxCost"], 5.0)
+        sourcing = [item for item in payload["evidence"] if item["dimension"] == "sourcing"]
+        self.assertTrue(sourcing)
+        self.assertIn("到岸成本", sourcing[-1]["note"])
+        done = next(item for item in payload["purchaseChecklist"] if item["id"] == "po_x_actual")
+        self.assertTrue(done["done"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

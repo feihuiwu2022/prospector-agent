@@ -579,6 +579,40 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+const qcTemplates = {
+  "电子": ["外包装完好无破损", "型号与容量与订单一致", "配件齐全（充电器/数据线/说明书）", "开机正常、无异响", "机身无划痕/无磕碰", "序列号可查且未激活"],
+  "家居": ["包装完整、无挤压变形", "颜色与样品一致（无明显色差）", "五金件牢固、无锈迹", "尺寸与需求一致", "安装配件齐全", "边角无破损"],
+  "宠物": ["规格尺寸符合使用场景", "材质无异味、无毛刺", "部件可拆洗或可更换", "承重与咬合测试通过", "清洁度合格", "包装配件齐全"],
+  "服饰": ["尺码与标注一致", "面料手感与描述一致", "走线整齐、无开线", "色差在可接受范围", "洗涤后不缩水变形", "吊牌与成分标签齐全"],
+  "美妆": ["保质期充足", "批号与外盒一致", "封口完好、无渗漏", "成分表与备案一致", "规格重量与订单一致", "运输温度符合要求"],
+  "其他": ["外包装完好", "型号/规格与订单一致", "配件与赠品齐全", "外观无破损或瑕疵", "功能可用（抽检）", "数量与单据一致"],
+};
+
+function renderActualCostPanel(candidate) {
+  const actual = candidate.actualCost || {};
+  const landed = actual.landed || {};
+  const template = qcTemplates[candidate.category] || qcTemplates["其他"];
+  const checked = new Set(actual.qcChecks || []);
+  const checks = template.map((item) => `<label class="check-option" style="display:inline-flex;gap:6px;align-items:flex-start"><input type="checkbox" name="qcChecks" value="${esc(item)}" ${checked.has(item) ? "checked" : ""} /><span>${esc(item)}</span></label>`).join("");
+  const numberField = (name, label, unit, step = "0.01") => `<div class="field"><label for="ac-${name}">${esc(label)} <span style="font-weight:400;color:#9ca59e">(${esc(unit)})</span></label><input id="ac-${name}" name="${name}" type="number" min="0" step="${step}" value="${actual[name] == null ? "" : esc(actual[name])}" /></div>`;
+  return `<section class="panel"><div class="panel-head"><h3>实际到货与验货</h3><small>到货后录入真实成本，验货项按品类给出</small></div>
+    <form id="actual-cost-form" class="form-grid">
+      ${numberField("quantity", "实收数量", "件", "1")}
+      ${numberField("unitPrice", "实际单价", "采购币种")}
+      <div class="field"><label for="ac-purchaseCurrency">采购币种</label><select id="ac-purchaseCurrency" name="purchaseCurrency"><option value="CNY" ${(actual.purchaseCurrency || "CNY") === "CNY" ? "selected" : ""}>CNY 元</option><option value="JPY" ${actual.purchaseCurrency === "JPY" ? "selected" : ""}>JPY 日元</option></select></div>
+      ${numberField("shippingTotal", "运费合计", "销售币种")}
+      ${numberField("dutyTotal", "关税合计", "销售币种")}
+      ${numberField("insuranceTotal", "保险合计", "销售币种")}
+      ${numberField("defectRate", "破损/不良比例", "比例", "0.001")}
+      <div class="field"><label for="ac-receivedAt">到货日期</label><input id="ac-receivedAt" name="receivedAt" type="date" value="${esc(actual.receivedAt || "")}" /></div>
+      <div class="field full"><label for="ac-note">备注</label><input id="ac-note" name="note" value="${esc(actual.note || "")}" placeholder="运费、破损、赔付等说明" /></div>
+      <div class="field full"><label>验货清单（${esc(candidate.category || "其他")}）</label><div class="check-grid">${checks}</div></div>
+      <div class="field full"><div class="form-actions"><button type="submit" class="button-secondary">保存并回填利润模型</button></div></div>
+    </form>
+    ${landed.complete ? `<div class="profit-result"><div class="profit-metric"><span>每件到岸成本</span><b>${Number(landed.landedUnitCost).toLocaleString("zh-CN")} ${esc(landed.purchaseCurrency || "")}</b></div><div class="profit-metric"><span>货值合计</span><b>${Number(landed.totalGoods).toLocaleString("zh-CN")}</b></div><div class="profit-metric"><span>破损预留/件</span><b>${Number(landed.defectCost).toLocaleString("zh-CN")}</b></div></div><small class="chat-result-foot">${esc(landed.note || "")}</small>` : ""}
+  </section>`;
+}
+
 function renderPurchaseOrderPanel(candidate) {
   const orders = (state.purchaseOrders || []).filter((item) => item.candidateId === candidate.id);
   if (!orders.length) {
@@ -793,6 +827,7 @@ function renderOverview(candidate) {
         ${renderPilotPanel(candidate)}
         ${renderRfqPanel(candidate)}
         ${renderPurchaseOrderPanel(candidate)}
+        ${renderActualCostPanel(candidate)}
         ${renderScalePlan(candidate)}
         ${renderTimeline(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
@@ -1423,6 +1458,23 @@ document.addEventListener("click", async (event) => {
       state.view = "detail";
       render();
       toast("报价已记录，并同步到货源档案。");
+      return;
+    }
+    if (form.id === "actual-cost-form") {
+      const payload = {};
+      for (const key of ["quantity", "unitPrice", "shippingTotal", "dutyTotal", "insuranceTotal", "defectRate"]) {
+        const raw = String(data.get(key) || "").trim();
+        if (raw !== "") payload[key] = Number(raw);
+      }
+      payload.purchaseCurrency = String(data.get("purchaseCurrency") || "CNY").toUpperCase();
+      payload.receivedAt = String(data.get("receivedAt") || "").trim();
+      payload.note = String(data.get("note") || "").trim();
+      payload.qcChecks = data.getAll("qcChecks").map(String);
+      await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ actualCost: payload }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("实际到货成本已保存并回填利润模型。");
       return;
     }
     if (action === "create-po") {

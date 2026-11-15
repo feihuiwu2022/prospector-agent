@@ -118,6 +118,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 - `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（`roles` 可多选：需求与内容侧 / 销售市场侧 / 货源侧）、销售市场（`sales_market`）、供给市场（`supply_market`）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录、经营画像和候选证据归类都读这张表；新增平台是改数据而不是改多处代码。目标市场（`MARKETS`：日本 / 中国 / 海外）决定销售平台清单，采购来源国决定货源平台清单。
 - `prospector/strategies.py`：策略与六阶段目录。
 - `calculate_batch_plan` 用首批数量与现金回本周期算资金占用与每日销量要求，不预测销量速度。
+- `build_landed_cost` 按实收数量摊薄运费、关税与保险，并按破损比例计入每件到岸成本；`qc_template` 按品类给出验货清单项。
 - `calibrate_assumptions` 把小测实测值（每单广告成本、退款率、净利率）与已填假设做对照，给出建议但不自动改写假设。
 - `build_scale_plan` 在小测达标后按实测日均销量给出 30/45/60 天备货量、安全库存与资金占用，并与预算对照；`advance_candidate_workflow` 同时把阶段状态变化写入候选的 `timeline`。
 - `evaluate_pilot` 用经营者录入的真实订单与投放数据，对照画像里的门槛（最少订单量、最高退款率、最低净利率）给出结论与建议；缺数据即「待补数据」，并据此推进六步流程的小测与扩量阶段。

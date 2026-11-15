@@ -494,6 +494,35 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(comparison["replyRate"], 1.0)
         self.assertEqual(comparison["missing"], [])
 
+    def test_landed_cost_spreads_freight_duty_and_defects(self) -> None:
+        from prospector.domain import build_landed_cost
+
+        incomplete = build_landed_cost({"quantity": 60})
+        self.assertFalse(incomplete["complete"])
+
+        landed = build_landed_cost({
+            "quantity": 60,
+            "unitPrice": 1820,
+            "purchaseCurrency": "CNY",
+            "shippingTotal": 600,
+            "dutyTotal": 300,
+            "insuranceTotal": 60,
+            "defectRate": 0.02,
+        })
+        self.assertTrue(landed["complete"])
+        self.assertEqual(landed["perUnitShipping"], 10.0)
+        self.assertEqual(landed["perUnitDuty"], 5.0)
+        self.assertEqual(landed["perUnitInsurance"], 1.0)
+        self.assertEqual(landed["defectCost"], 36.4)
+        self.assertAlmostEqual(landed["landedUnitCost"], 1820 + 36.4 + 10 + 1, places=2)
+        self.assertEqual(landed["totalGoods"], 109200.0)
+
+    def test_qc_templates_cover_the_candidate_category(self) -> None:
+        from prospector.domain import qc_template
+
+        self.assertIn("序列号", " ".join(qc_template("电子")))
+        self.assertTrue(qc_template("不存在的类目"))
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

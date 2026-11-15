@@ -607,6 +607,76 @@ def build_supplier_comparison(rfq: dict, profile: dict) -> dict:
     }
 
 
+QC_TEMPLATES = {
+    "电子": ["外包装完好无破损", "型号与容量与订单一致", "配件齐全（充电器/数据线/说明书）", "开机正常、无异响", "机身无划痕/无磕碰", "序列号可查且未激活"],
+    "家居": ["包装完整、无挤压变形", "颜色与样品一致（无明显色差）", "五金件牢固、无锈迹", "尺寸与需求一致", "安装配件齐全", "边角无破损"],
+    "宠物": ["规格尺寸符合使用场景", "材质无异味、无毛刺", "部件可拆洗或可更换", "承重与咬合测试通过", "清洁度合格", "包装配件齐全"],
+    "服饰": ["尺码与标注一致", "面料手感与描述一致", "走线整齐、无开线", "色差在可接受范围（拍对照图）", "洗涤后不缩水变形", "吊牌与成分标签齐全"],
+    "美妆": ["保质期充足", "批号与外盒一致", "封口完好、无渗漏", "成分表与备案一致", "规格重量与订单一致", "运输温度符合要求"],
+    "其他": ["外包装完好", "型号/规格与订单一致", "配件与赠品齐全", "外观无破损或瑕疵", "功能可用（抽检）", "数量与单据一致"],
+}
+
+
+def qc_template(category: str) -> list[str]:
+    """Checklist items for inspecting a delivery."""
+    return list(QC_TEMPLATES.get(category, QC_TEMPLATES["其他"]))
+
+
+def build_landed_cost(actual: dict) -> dict:
+    """Turn a received delivery into per-unit cost numbers.
+
+    Freight, duty and insurance are divided over the received quantity so
+    they can be entered into the profit model; the exchange rate is never
+    guessed, so a cross-currency scenario still waits for the operator.
+    """
+    missing = [
+        key for key in ("quantity", "unitPrice", "purchaseCurrency")
+        if (actual or {}).get(key) in (None, "")
+    ]
+    if missing:
+        return {"complete": False, "missingFields": missing}
+
+    def number(key: str, default: float = 0.0) -> float:
+        raw = actual.get(key)
+        if raw in (None, ""):
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} 必须是有效数字。") from exc
+
+    quantity = number("quantity")
+    unit_price = number("unitPrice")
+    if quantity <= 0 or unit_price <= 0:
+        return {"complete": False, "missingFields": missing}
+    shipping = number("shippingTotal")
+    duty = number("dutyTotal")
+    insurance = number("insuranceTotal")
+    defect_rate = number("defectRate")
+    per_unit_shipping = round(shipping / quantity, 2)
+    per_unit_duty = round(duty / quantity, 2)
+    per_unit_insurance = round(insurance / quantity, 2)
+    defect_cost = round(unit_price * defect_rate, 2)
+    landed = round(unit_price + defect_cost + per_unit_shipping + per_unit_insurance, 2)
+    return {
+        "complete": True,
+        "quantity": quantity,
+        "unitPrice": unit_price,
+        "purchaseCurrency": str(actual.get("purchaseCurrency", "")).upper(),
+        "perUnitShipping": per_unit_shipping,
+        "perUnitDuty": per_unit_duty,
+        "perUnitInsurance": per_unit_insurance,
+        "defectRate": defect_rate,
+        "defectCost": defect_cost,
+        "landedUnitCost": landed,
+        "totalGoods": round(unit_price * quantity, 2),
+        "totalShipping": shipping,
+        "totalDuty": duty,
+        "totalInsurance": insurance,
+        "note": "运费、关税与保险按实收数量摊到每件；破损率按你填的比例计入成本。",
+    }
+
+
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")

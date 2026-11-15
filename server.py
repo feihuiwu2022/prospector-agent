@@ -31,6 +31,7 @@ from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
+    build_landed_cost,
     build_scale_plan,
     build_supplier_comparison,
     calibrate_assumptions,
@@ -1589,7 +1590,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self.send_json(404, {"error": "没有找到这个接口。"})
             return
-        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist", "pilot"}
+        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist", "pilot", "actualCost"}
 
         def update_candidate(data):
             candidate = find_candidate(data, match.group(1))
@@ -1606,6 +1607,42 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if key == "status" and value not in {"researching", "ready_for_test", "paused", "archived"}:
                         raise ValueError("研究状态无效。")
+                    if key == "actualCost":
+                        if not isinstance(value, dict):
+                            raise ValueError("实际到货成本必须是对象。")
+                        landed = build_landed_cost(value)
+                        candidate["actualCost"] = {**value, "landed": landed, "recordedAt": utc_now()}
+                        if landed.get("complete"):
+                            assumptions = candidate.setdefault("assumptions", {})
+                            assumptions["purchasePrice"] = landed["unitPrice"]
+                            assumptions["purchaseCurrency"] = landed["purchaseCurrency"]
+                            assumptions["inboundCost"] = round(
+                                landed["perUnitShipping"] + landed["perUnitInsurance"], 2
+                            )
+                            assumptions["dutyTaxCost"] = landed["perUnitDuty"]
+                            candidate.setdefault("evidence", []).append({
+                                "id": str(uuid4()),
+                                "dimension": "sourcing",
+                                "title": f"实际到货成本 · {landed['quantity']:g} 件",
+                                "sourceType": "人工录入的到货记录",
+                                "url": f"cost://{uuid4()}",
+                                "observedAt": str(value.get("receivedAt") or date.today().isoformat())[:10],
+                                "note": (
+                                    f"实收 {landed['quantity']:g} 件，单价 {landed['unitPrice']} {landed['purchaseCurrency']}；"
+                                    f"运费摊薄 {landed['perUnitShipping']}、关税摊薄 {landed['perUnitDuty']}、"
+                                    f"保险摊薄 {landed['perUnitInsurance']}、破损预留 {landed['defectCost']}；"
+                                    f"每件到岸成本 {landed['landedUnitCost']} {landed['purchaseCurrency']}。"
+                                    + (f" 备注：{value.get('note')}" if value.get("note") else "")
+                                ),
+                                "createdAt": utc_now(),
+                            })
+                            for item in candidate.get("purchaseChecklist", []):
+                                if str(item.get("id", "")).endswith("_actual"):
+                                    item["done"] = True
+                                    item["status"] = "已确认"
+                        candidate["updatedAt"] = utc_now()
+                        advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
+                        continue
                     if key == "pilot":
                         if not isinstance(value, dict):
                             raise ValueError("小测数据必须是对象。")
