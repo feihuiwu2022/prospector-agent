@@ -239,6 +239,7 @@ class Handler(BaseHTTPRequestHandler):
                 "discoveryRuns": sorted(data.get("discoveryRuns", []), key=lambda item: item.get("createdAt", ""), reverse=True),
                 "conversations": sorted(data.get("conversations", []), key=lambda item: item.get("updatedAt", ""), reverse=True),
                 "priceObservations": data.get("priceObservations", [])[-300:],
+                "suppliers": data.get("suppliers", []),
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -285,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/discovery":
             self.create_discovery_run(body)
+            return
+        if path == "/api/suppliers":
+            self.upsert_supplier(body)
             return
         promote_match = re.fullmatch(r"/api/discovery/([\w-]+)/candidate", path)
         if promote_match:
@@ -724,6 +728,61 @@ class Handler(BaseHTTPRequestHandler):
                     run.update({"status": "failed", "stage": "failed", "progress": 100, "message": "Agent 运行遇到内部错误，请检查服务并重试。", "completedAt": utc_now(), "updatedAt": utc_now()})
             STORE.update(fail_unexpected)
 
+    def upsert_supplier(self, body: dict) -> None:
+        """Save a shop as a sourcing lead, keeping the latest observed price.
+
+        A supplier record is a note about a shop, not a verified supplier:
+        MOQ, lead time and invoices stay empty until a human fills them in.
+        """
+        platform = str(body.get("platform", "")).strip()[:80]
+        seller = str(body.get("seller", "")).strip()[:120]
+        if not platform or not seller:
+            raise ValueError("标记货源需要平台与店铺（页面域名）。")
+        note = str(body.get("note", "")).strip()[:600]
+        status = str(body.get("status", "待联系")).strip()[:40] or "待联系"
+        if status not in {"待联系", "已联系", "已报价", "已排除"}:
+            raise ValueError("货源状态必须是待联系、已联系、已报价或已排除。")
+
+        def save(data):
+            suppliers = data.setdefault("suppliers", [])
+            existing = next(
+                (item for item in suppliers if item.get("platform") == platform and item.get("seller") == seller),
+                None,
+            )
+            now = utc_now()
+            if existing is None:
+                existing = {
+                    "id": str(uuid4()),
+                    "platform": platform,
+                    "seller": seller,
+                    "url": str(body.get("url", "")).strip()[:1000],
+                    "products": [],
+                    "note": "",
+                    "status": status,
+                    "lastPrice": body.get("price"),
+                    "lastCurrency": str(body.get("currency", ""))[:8],
+                    "lastObservedAt": str(body.get("observedAt", ""))[:10],
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+                suppliers.append(existing)
+            existing["status"] = status
+            if note:
+                existing["note"] = note
+            existing["url"] = str(body.get("url", existing.get("url", ""))).strip()[:1000] or existing.get("url", "")
+            if body.get("price") not in (None, ""):
+                existing["lastPrice"] = body.get("price")
+                existing["lastCurrency"] = str(body.get("currency", existing.get("lastCurrency", "")))[:8]
+                existing["lastObservedAt"] = str(body.get("observedAt", existing.get("lastObservedAt", "")))[:10]
+            product = str(body.get("product", "")).strip()[:120]
+            if product and product not in existing["products"]:
+                existing["products"].append(product)
+            existing["updatedAt"] = now
+            return existing
+
+        saved = STORE.update(save)
+        self.send_json(201, saved)
+
     def create_discovery_run(self, body: dict) -> None:
         trigger = str(body.get("trigger", "")).strip()
         if trigger == "tiktok_trend":
@@ -1057,6 +1116,25 @@ class Handler(BaseHTTPRequestHandler):
                 return profile
 
             self.send_json(200, STORE.update(save_profile))
+            return
+
+        supplier_match = re.fullmatch(r"/api/suppliers/([\w-]+)", path)
+        if supplier_match:
+            def update_supplier(data):
+                supplier = next((item for item in data.get("suppliers", []) if item.get("id") == supplier_match.group(1)), None)
+                if not supplier:
+                    return None
+                status = str(body.get("status", supplier.get("status", "待联系"))).strip()[:40]
+                if status not in {"待联系", "已联系", "已报价", "已排除"}:
+                    raise ValueError("货源状态必须是待联系、已联系、已报价或已排除。")
+                supplier["status"] = status
+                if "note" in body:
+                    supplier["note"] = str(body.get("note", "")).strip()[:600]
+                supplier["updatedAt"] = utc_now()
+                return supplier
+
+            result = STORE.update(update_supplier)
+            self.send_json(200 if result else 404, result or {"error": "没有找到这个货源记录。"})
             return
 
         match = re.fullmatch(r"/api/candidates/([\w-]+)", path)

@@ -247,6 +247,41 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertEqual(stages["economics"]["status"], "partial")
         self.assertTrue(payload["purchaseChecklist"][1]["done"])
 
+    def test_supplier_archive_records_a_shop(self) -> None:
+        status, payload = _post(
+            f"{self.base}/api/suppliers",
+            {
+                "platform": "淘宝 / 天猫",
+                "seller": "shop123.taobao.com",
+                "url": "https://shop123.taobao.com/item.htm?id=1",
+                "price": 1899,
+                "currency": "CNY",
+                "product": "OPPO K13s",
+                "observedAt": "2026-11-15",
+            },
+        )
+        self.assertEqual(status, 201)
+        supplier_id = payload["id"]
+        self.assertEqual(payload["status"], "待联系")
+        self.assertEqual(payload["lastPrice"], 1899)
+
+        status, updated = _post(
+            f"{self.base}/api/suppliers/{supplier_id}",
+            {"status": "已报价", "note": "100 件起，报价含税"},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["status"], "已报价")
+        self.assertIn("100 件起", updated["note"])
+
+        bootstrap = json.loads(_get(f"{self.base}/api/bootstrap")[2])
+        self.assertTrue(any(item["id"] == supplier_id for item in bootstrap["suppliers"]))
+
+    def test_supplier_requires_platform_and_seller(self) -> None:
+        status, payload = _post(f"{self.base}/api/suppliers", {"platform": "淘宝"}, method="POST")
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

@@ -39,6 +39,7 @@ DEFAULT_STATE = {
     "discoveryRuns": [],
     "conversations": [],
     "priceObservations": [],
+    "suppliers": [],
 }
 
 

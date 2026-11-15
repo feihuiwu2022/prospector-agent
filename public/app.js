@@ -557,7 +557,7 @@ function renderDetail() {
       <button class="back-button" data-action="home" aria-label="返回机会工作台">←</button>
       <div class="detail-symbol">${categoryIcon(candidate.category)}</div>
       <div class="detail-title"><h1>${esc(candidate.name)}</h1><div class="detail-meta"><span>${esc(candidate.category)}</span><span>·</span><span>${esc(candidate.market)}</span><span>·</span><span>${esc(candidate.platform)}</span><span>·</span><span>更新于 ${fmtDate(candidate.updatedAt)}</span></div></div>
-      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.priceGap ? `<button class="button-secondary" data-action="price-gap-pair" data-id="${esc(candidate.id)}">生成价差研究</button>` : ""}${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
+      <div class="detail-actions"><button class="button-quiet" data-action="edit-candidate">编辑</button>${candidate.priceGap ? `<button class="button-secondary" data-action="price-gap-pair" data-id="${esc(candidate.id)}">生成价差研究</button>` : ""}<button class="button-quiet" data-action="scan-price-gap" data-id="${esc(candidate.id)}">扫描同品比价</button>${candidate.status === "ready_for_test" ? `<span class="status-pill done">可进入小测</span>` : `<button class="button-secondary" data-action="mark-ready" ${scoreDone ? "" : "title='四项独立判断完成后可标记'"}>标记可进入小测</button>`}${candidate.status === "paused" ? `<button class="button-quiet" data-action="resume">恢复研究</button>` : candidate.status === "researching" ? `<button class="button-quiet" data-action="pause">暂停</button>` : ""}<button class="button-quiet" data-action="archive">归档</button></div>
     </div>
     <nav class="detail-tabs">${tabs.map(([key, label]) => `<button class="detail-tab ${state.tab === key ? "active" : ""}" data-action="tab" data-tab="${key}">${label}${key === "evidence" && candidate.evidence?.length ? ` <span>${candidate.evidence.length}</span>` : ""}</button>`).join("")}</nav>
     ${tabContent}
@@ -591,7 +591,8 @@ function renderSellerComparison(candidate) {
   const rows = [...groups.entries()].map(([, items]) => {
     const sorted = [...items].sort((a, b) => String(b.observedAt).localeCompare(String(a.observedAt)));
     const latest = sorted[0];
-    return `<tr><td><b>${esc(latest.platform || "未知平台")}</b><small>${esc((latest.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1"))}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${sorted.length} 次</td><td>${latest.url ? `<a href="${esc(latest.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td></tr>`;
+    const seller = (latest.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1");
+    return `<tr><td><b>${esc(latest.platform || "未知平台")}</b><small>${esc(seller)}</small></td><td>${latest.price == null ? "—" : `${Number(latest.price).toLocaleString("zh-CN")} ${esc(latest.currency || "")}`}</td><td>${esc(latest.observedAt || "")}</td><td>${sorted.length} 次</td><td>${latest.url ? `<a href="${esc(latest.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td><td><button class="button-quiet" data-action="mark-supplier" data-platform="${esc(latest.platform || "")}" data-seller="${esc(seller)}" data-url="${esc(latest.url || "")}" data-price="${esc(latest.price ?? "")}" data-currency="${esc(latest.currency || "")}" data-product="${esc(latest.product || "")}">标记货源</button></td></tr>`;
   }).sort((a, b) => a.localeCompare(b)).join("");
   return `<section class="panel"><div class="panel-head"><h3>采购比价表</h3><small>同一商品与配置在各个页面见过的报价</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 店铺</th><th>最近可见报价</th><th>观察日期</th><th>次数</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>这些是页面报价记录，不等于可下单价；起订量、交期与发票仍需向卖家确认。</span></div></section>`;
 }
@@ -914,6 +915,21 @@ function renderLeadLibrary(observations) {
   return `<section class="panel"><div class="panel-head"><h3>货源线索库</h3><small>比价时见过的页面与店铺，按最近一次报价排序</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 商品</th><th>最近可见报价</th><th>观察日期</th><th>次数</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>线索库只是“某个页面在某天显示过这个价”，不是供应商能力、MOQ 或可稳定拿货的证明。</span></div></section>`;
 }
 
+function renderSupplierArchive(suppliers) {
+  if (!suppliers.length) {
+    return `<section class="panel"><div class="panel-head"><h3>货源档案</h3><small>标记过的店铺与跟进状态</small></div><div class="table-empty" style="padding:22px"><h3>还没有标记货源</h3><p>在采购比价表或货源线索库里点“标记货源”，就会在这里建立一份店铺档案。</p></div></section>`;
+  }
+  const rows = suppliers.map((item) => `<tr>
+    <td><b>${esc(item.platform || "")}</b><small>${esc(item.seller || "")}</small></td>
+    <td>${esc((item.products || []).join("、") || "—")}</td>
+    <td>${item.lastPrice == null ? "—" : `${Number(item.lastPrice).toLocaleString("zh-CN")} ${esc(item.lastCurrency || "")}`}<small>${esc(item.lastObservedAt || "")}</small></td>
+    <td><select data-supplier-status="${esc(item.id)}">${["待联系", "已联系", "已报价", "已排除"].map((status) => `<option ${item.status === status ? "selected" : ""}>${status}</option>`).join("")}</select></td>
+    <td><input data-supplier-note="${esc(item.id)}" value="${esc(item.note || "")}" placeholder="备注：MOQ、报价、时效…" /></td>
+    <td>${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td>
+  </tr>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>货源档案</h3><small>只是店铺笔记，不是已验证的供应商</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台 / 店铺</th><th>涉及商品</th><th>最近可见价</th><th>状态</th><th>备注</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>档案里的价格是页面观察值；MOQ、交期、发票与报价必须由你向卖家确认后写进备注。</span></div></section>`;
+}
+
 function showNewModal() {
   modalRoot.innerHTML = `
     <div class="modal-backdrop" data-action="backdrop-close"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="new-title">
@@ -1023,6 +1039,46 @@ document.addEventListener("click", async (event) => {
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
     if (action === "profile") { state.view = "profile"; render(); return; }
+    if (action === "mark-supplier") {
+      const created = await api("/api/suppliers", {
+        method: "POST",
+        body: JSON.stringify({
+          platform: button.dataset.platform,
+          seller: button.dataset.seller,
+          url: button.dataset.url,
+          price: button.dataset.price === "" ? null : Number(button.dataset.price),
+          currency: button.dataset.currency,
+          product: button.dataset.product,
+        }),
+      });
+      await refresh();
+      render();
+      toast(`已把 ${created.platform} · ${created.seller} 加入货源档案。`);
+      return;
+    }
+    if (action === "scan-price-gap") {
+      const candidate = state.candidates.find((item) => item.id === button.dataset.id);
+      if (!candidate) return;
+      const product = candidate.priceGap?.product || candidate.name;
+      const response = await api("/api/agent/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "price_gap",
+          message: product,
+          market: candidate.market || state.profile.market,
+          sourcingCountry: candidate.sourcingCountry || state.profile.sourcingCountry,
+          conversationId: "",
+        }),
+      });
+      state.view = "home";
+      state.currentConversationId = response.conversationId;
+      state.showNewConversation = false;
+      state.chatMode = "price_gap";
+      await refresh();
+      toast(`正在扫描 ${product} 的跨平台报价。`);
+      watchAgentDiscovery(response.run.id);
+      return;
+    }
     if (action === "price-gap-pair") {
       const created = await api("/api/discovery", { method: "POST", body: JSON.stringify({ trigger: "price_gap_pair", candidateId: button.dataset.id }) });
       await refresh();
@@ -1291,11 +1347,33 @@ document.addEventListener("change", async (event) => {
     }
     return;
   }
+  if (target.dataset && target.dataset.supplierNote) {
+    try {
+      await api(`/api/suppliers/${encodeURIComponent(target.dataset.supplierNote)}`, { method: "PATCH", body: JSON.stringify({ note: target.value }) });
+      await refresh();
+      render();
+      toast("货源备注已保存。");
+    } catch (error) {
+      toast(error.message, true);
+    }
+    return;
+  }
   if (!(target instanceof HTMLSelectElement)) return;
   if (target.dataset.change === "chat-market") {
     state.chatMarket = target.value;
     state.chatPlatform = "";
     renderHome();
+    return;
+  }
+  if (target.dataset.supplierStatus) {
+    try {
+      await api(`/api/suppliers/${encodeURIComponent(target.dataset.supplierStatus)}`, { method: "PATCH", body: JSON.stringify({ status: target.value }) });
+      await refresh();
+      render();
+      toast("货源状态已更新。");
+    } catch (error) {
+      toast(error.message, true);
+    }
     return;
   }
   if (target.dataset.change === "profile-market") {
