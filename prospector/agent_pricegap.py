@@ -273,6 +273,38 @@ def _opportunities(groups: list[dict], currency: str) -> list[dict]:
     return result
 
 
+def _cross_market_scan(product: str, source_country: str, progress=None) -> dict:
+    """Look up the same model on the platforms of the source country.
+
+    The two sides are priced in different currencies, so no gap is computed
+    here: the exchange rate, inbound cost and duty are not on any page and
+    stay for the operator to fill in.
+    """
+    channels = [item for item in supply_channels(source_country) if "sales" in item["roles"]]
+    if not channels:
+        return {"sourceCountry": source_country, "rows": [], "pairs": []}
+    currency = market_currency(source_country)
+    plan = _search_plan(product, source_country, source_country, [item["id"] for item in channels])
+    if progress:
+        progress("price_gap_search", f"正在搜索 {source_country} 来源平台的 {product} 报价…", 30)
+    try:
+        results = search_many(plan)
+    except WebSearchError:
+        results = []
+    rows: list[dict] = []
+    for platform in channels:
+        platform_results = [item for item in results if item.get("platformId") == platform["id"]]
+        if not platform_results:
+            continue
+        rows.extend(_platform_rows(product, platform, platform_results, currency))
+    return {
+        "sourceCountry": source_country,
+        "currency": currency,
+        "rows": sorted(rows, key=lambda row: row["priceLow"]),
+        "pairs": [],
+    }
+
+
 def run_price_gap_scan(product: str, market: str = "中国", source_country: str = "中国", platform_ids: list[str] | None = None, progress=None) -> dict:
     """Compare one product model across the platforms of the target market."""
     product = _as_text(product, 160)
@@ -350,15 +382,38 @@ def run_price_gap_scan(product: str, market: str = "中国", source_country: str
 
     cross_border = None
     if source_country and source_country != market:
-        overseas = supply_channels(source_country)
-        cross_border = {
-            "sourceCountry": source_country,
-            "targetMarket": market,
-            "note": (
-                f"跨市场价差涉及币种、汇率、关税与头程，页面没有这些数字，因此不自动给出差价结论；"
-                f"来源国的可比平台：{'、'.join(item['name'] for item in overseas) or '未登记'}。"
-            ),
-        }
+        cross_border = _cross_market_scan(product, source_country, progress=progress)
+        cross_border["targetMarket"] = market
+        cross_border["targetCurrency"] = market_currency(market)
+        source_platform_names = list(dict.fromkeys(row["platform"] for row in cross_border.get("rows", [])))
+        cross_border["note"] = (
+            f"跨市场价差涉及币种、汇率、关税与头程，页面没有这些数字，因此不自动给出差价结论；"
+            f"来源国的可比平台：{'、'.join(source_platform_names) or '未登记'}。"
+        )
+        # Pair the cheapest source-country price with every comparable target
+        # group.  The numbers stay side by side; no conversion happens here.
+        source_rows = [row for row in cross_border.get("rows", []) if not row["secondHand"]]
+        pairs = []
+        if source_rows:
+            cheapest = min(source_rows, key=lambda row: row["priceLow"])
+            for group in comparable:
+                target_rows = [row for row in group["rows"] if not row["secondHand"]]
+                if not target_rows:
+                    continue
+                dearest = max(target_rows, key=lambda row: row["priceLow"])
+                pairs.append({
+                    "config": group["config"],
+                    "sourcePlatform": cheapest["platform"],
+                    "sourcePrice": cheapest["priceLow"],
+                    "sourceCurrency": cheapest["currency"],
+                    "sourceUrl": cheapest["url"],
+                    "targetPlatform": dearest["platform"],
+                    "targetPrice": dearest["priceLow"],
+                    "targetCurrency": dearest["currency"],
+                    "targetUrl": dearest["url"],
+                    "note": "两侧币种不同：需要人工填汇率、头程与关税后才能算贡献利润。",
+                })
+        cross_border["pairs"] = pairs
 
     gaps = [
         "差价是搜索摘要中的挂牌价，未扣平台佣金、广告、履约与退货预留，不能当作利润。",
@@ -404,69 +459,109 @@ def run_price_gap_scan(product: str, market: str = "中国", source_country: str
 
 
 def build_price_gap_candidates(product: str, result: dict, profile: dict) -> list[dict]:
-    """Turn comparable same-spec price gaps into reviewable candidates.
+    """Turn comparable price gaps into reviewable candidates.
 
-    The price gap itself is a gross number from public snippets.  The
-    candidate starts with the two observed prices and leaves every fee
-    for the operator to fill in, so the profit model stays explicit.
+    Two kinds of gap are handled: two platforms of the same market (same
+    currency) and a source-country platform against a target-market platform
+    (different currency).  In both cases the candidate starts with the
+    observed prices only; every fee, rate and duty is left for the operator,
+    so the profit model stays explicit and never guesses.
     """
-    opportunities = result.get("opportunities", [])[:2]
     market = str(profile.get("market", "中国"))[:80]
     currency = result.get("currency", "CNY")
+    specs = []
+    for item in result.get("opportunities", [])[:2]:
+        specs.append({
+            "kind": "same_market",
+            "config": item["config"],
+            "sourcePlatform": item["sourcePlatform"],
+            "sourcePrice": item["sourcePrice"],
+            "sourceCurrency": currency,
+            "sourceUrl": item.get("sourceUrl", ""),
+            "targetPlatform": item["targetPlatform"],
+            "targetPrice": item["targetPrice"],
+            "targetCurrency": currency,
+            "targetUrl": item.get("targetUrl", ""),
+            "gapText": f"同配置毛差价 {item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）",
+        })
+    cross = (result.get("crossBorder") or {}).get("pairs") or []
+    for pair in cross[:2]:
+        specs.append({
+            "kind": "cross_market",
+            "config": pair["config"],
+            "sourcePlatform": pair["sourcePlatform"],
+            "sourcePrice": pair["sourcePrice"],
+            "sourceCurrency": pair["sourceCurrency"],
+            "sourceUrl": pair.get("sourceUrl", ""),
+            "targetPlatform": pair["targetPlatform"],
+            "targetPrice": pair["targetPrice"],
+            "targetCurrency": pair["targetCurrency"],
+            "targetUrl": pair.get("targetUrl", ""),
+            "gapText": "两侧币种不同，需要人工填汇率、头程与关税后才能算贡献利润",
+        })
+
+    stages = {stage["id"]: stage for stage in WORKFLOW_STAGES}
     candidates = []
-    for item in opportunities:
+    for spec in specs:
         candidate_id = str(uuid4())
-        observed = item.get("observedAt") or date.today().isoformat()
+        observed = date.today().isoformat()
+        cross_border = spec["kind"] == "cross_market"
         evidence = [
             {
                 "id": str(uuid4()),
                 "dimension": "sourcing",
-                "title": f"{item['sourcePlatform']} · {product} {item['config']}",
-                "sourceType": f"{item['sourcePlatform']}（公开搜索摘要）",
-                "url": item.get("sourceUrl", ""),
+                "title": f"{spec['sourcePlatform']} · {product} {spec['config']}",
+                "sourceType": f"{spec['sourcePlatform']}（公开搜索摘要）",
+                "url": spec["sourceUrl"],
                 "observedAt": observed,
-                "note": f"低价一侧：公开搜索摘要可见报价 {item['sourcePrice']} {currency}。未打开商品页核实，配件、赠品与店铺优惠可能不同。",
+                "note": (
+                    f"低价一侧：公开搜索摘要可见报价 {spec['sourcePrice']} {spec['sourceCurrency']}。"
+                    "未打开商品页核实，配件、赠品与店铺优惠可能不同。"
+                ),
                 "createdAt": _now_iso(),
             },
             {
                 "id": str(uuid4()),
                 "dimension": "competition",
-                "title": f"{item['targetPlatform']} · {product} {item['config']}",
-                "sourceType": f"{item['targetPlatform']}（公开搜索摘要）",
-                "url": item.get("targetUrl", ""),
+                "title": f"{spec['targetPlatform']} · {product} {spec['config']}",
+                "sourceType": f"{spec['targetPlatform']}（公开搜索摘要）",
+                "url": spec["targetUrl"],
                 "observedAt": observed,
-                "note": f"高价一侧：公开搜索摘要可见报价 {item['targetPrice']} {currency}，与低价一侧的可见毛差价 {item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）。差价未扣佣金、广告、履约与退货，不是利润。",
+                "note": (
+                    f"高价一侧：公开搜索摘要可见报价 {spec['targetPrice']} {spec['targetCurrency']}；{spec['gapText']}。"
+                    "差价未扣佣金、广告、履约与退货，不是利润。"
+                ),
                 "createdAt": _now_iso(),
             },
         ]
-        stages = {stage["id"]: stage for stage in WORKFLOW_STAGES}
         workflow = [
             {"id": "demand", "number": stages["demand"]["number"], "title": stages["demand"]["title"], "status": "pending", "note": "比价模式不判断需求规模；如要投入需另找需求证据。"},
-            {"id": "market", "number": stages["market"]["number"], "title": stages["market"]["title"], "status": "partial", "note": f"已在{item['targetPlatform']}找到同配置公开报价；价格与在售状态仍需打开页面核实。"},
-            {"id": "sourcing", "number": stages["sourcing"]["number"], "title": stages["sourcing"]["title"], "status": "partial", "note": f"已在{item['sourcePlatform']}找到同配置公开报价；是否可稳定采购、MOQ 与发票需另行确认。"},
-            {"id": "economics", "number": stages["economics"]["number"], "title": stages["economics"]["title"], "status": "partial", "note": "毛差价已填入利润模型；平台佣金、广告、履约与退货预留待填。"},
+            {"id": "market", "number": stages["market"]["number"], "title": stages["market"]["title"], "status": "partial", "note": f"已在{spec['targetPlatform']}找到同配置公开报价；价格与在售状态仍需打开页面核实。"},
+            {"id": "sourcing", "number": stages["sourcing"]["number"], "title": stages["sourcing"]["title"], "status": "partial", "note": f"已在{spec['sourcePlatform']}找到同配置公开报价；是否可稳定采购、MOQ 与发票需另行确认。"},
+            {"id": "economics", "number": stages["economics"]["number"], "title": stages["economics"]["title"], "status": "partial", "note": "两端报价已填入利润模型；" + ("汇率、头程与关税待填。" if cross_border else "平台佣金、广告、履约与退货预留待填。")},
             {"id": "pilot", "number": stages["pilot"]["number"], "title": stages["pilot"]["title"], "status": "pending", "note": "尚未产生真实订单；下样与采购需经营者决定。"},
             {"id": "scale", "number": stages["scale"]["number"], "title": stages["scale"]["title"], "status": "blocked", "note": "等待真实小测结果。"},
         ]
         candidates.append({
             "id": candidate_id,
-            "name": f"{product} {item['config']} · 跨平台差价",
+            "name": f"{product} {spec['config']} · {'跨市场价差' if cross_border else '跨平台差价'}",
             "category": "其他",
             "hypothesis": (
-                f"同配置 {product} {item['config']} 在{item['sourcePlatform']}与{item['targetPlatform']}的公开报价相差 "
-                f"{item['grossGap']} {currency}（{item['grossGapPct'] * 100:.1f}%）。"
-                f"是否为真实利润取决于平台佣金、广告、履约、退货与是否可稳定拿到低价货源。"
+                f"同配置 {product} {spec['config']} 在{spec['sourcePlatform']}与{spec['targetPlatform']}的公开报价："
+                f"{spec['sourcePrice']} {spec['sourceCurrency']} 与 {spec['targetPrice']} {spec['targetCurrency']}；{spec['gapText']}。"
+                "是否为真实利润取决于平台佣金、广告、履约、退货与是否可稳定拿到低价货源。"
             ),
             "market": market,
-            "platform": item["targetPlatform"],
+            "platform": spec["targetPlatform"],
             "sourcingCountry": str(profile.get("sourcingCountry", "中国"))[:80],
             "fulfillment": str(profile.get("fulfillment", "待确认"))[:80],
             "mode": "active_research",
             "status": "researching",
             "assumptions": {
-                "sellingPrice": item["targetPrice"],
-                "purchasePrice": item["sourcePrice"],
-                "currency": currency,
+                "sellingPrice": spec["targetPrice"],
+                "sellingCurrency": spec["targetCurrency"],
+                "purchasePrice": spec["sourcePrice"],
+                "purchaseCurrency": spec["sourceCurrency"],
             },
             "evidence": evidence,
             "scores": {},
@@ -475,7 +570,10 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 "buyer": "",
                 "productIdea": "",
                 "strategyFit": "",
-                "signal": f"{item['sourcePlatform']} {item['sourcePrice']} {currency} → {item['targetPlatform']} {item['targetPrice']} {currency}",
+                "signal": (
+                    f"{spec['sourcePlatform']} {spec['sourcePrice']} {spec['sourceCurrency']} → "
+                    f"{spec['targetPlatform']} {spec['targetPrice']} {spec['targetCurrency']}"
+                ),
                 "confidence": "low",
                 "risks": ["公开摘要价格未经页面核实", "同配置颜色或套装可能不同", "未包含佣金、广告、履约与退货成本"],
                 "evidenceIds": [row["id"] for row in evidence],
@@ -486,10 +584,11 @@ def build_price_gap_candidates(product: str, result: dict, profile: dict) -> lis
                 "status": "partial",
                 "recommendation": "hold",
                 "recommendationReason": "差价可见但费用未填，需人工核实后才能判断是否值得投入。",
-                "marketAssessment": f"{item['targetPlatform']} 同配置公开报价 {item['targetPrice']} {currency}。",
-                "sourcingAssessment": f"{item['sourcePlatform']} 同配置公开报价 {item['sourcePrice']} {currency}。",
+                "marketAssessment": f"{spec['targetPlatform']} 同配置公开报价 {spec['targetPrice']} {spec['targetCurrency']}。",
+                "sourcingAssessment": f"{spec['sourcePlatform']} 同配置公开报价 {spec['sourcePrice']} {spec['sourceCurrency']}。",
                 "profitReadiness": "partial",
-                "gaps": ["平台佣金", "广告成本", "履约与运费", "退货预留", "低价货源是否可稳定采购"],
+                "gaps": ["平台佣金", "广告成本", "履约与运费", "退货预留", "低价货源是否可稳定采购"]
+                + (["汇率", "头程与入仓", "关税及进口税费"] if cross_border else []),
                 "marketEvidenceIds": [evidence[1]["id"]],
                 "sourcingEvidenceIds": [evidence[0]["id"]],
                 "model": "price_gap_scan",

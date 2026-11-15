@@ -448,6 +448,9 @@ class Handler(BaseHTTPRequestHandler):
             "platform": str(body.get("platform") or base_profile.get("platform") or default_platform_for_market(str(body.get("market") or base_profile.get("market", "日本"))))[:80],
             "sourcingCountry": str(body.get("sourcingCountry") or base_profile.get("sourcingCountry", "中国"))[:80],
         }
+        requested_platforms = body.get("platformIds")
+        if isinstance(requested_platforms, list) and requested_platforms:
+            profile["platformIds"] = [str(item)[:40] for item in requested_platforms]
         conversation_id = str(body.get("conversationId", "")).strip()
         created_at = utc_now()
         run_id = str(uuid4())
@@ -522,8 +525,10 @@ class Handler(BaseHTTPRequestHandler):
                     prompt,
                     profile.get("market", "中国"),
                     profile.get("sourcingCountry", "中国"),
+                    platform_ids=profile.get("platformIds"),
                     progress=update_progress,
                 )
+                result["history"] = self._record_price_observations(prompt, result)
                 candidates = build_price_gap_candidates(prompt, result, profile)
                 final_status = result.get("status", "needs_manual_validation")
                 summary = result.get("summary", "同品比价完成。")
@@ -592,6 +597,51 @@ class Handler(BaseHTTPRequestHandler):
             self._fail_agent_chat(run_id, conversation_id, failure_message)
         except Exception:
             self._fail_agent_chat(run_id, conversation_id, "Agent 运行遇到内部错误，请检查服务并重试。")
+
+    @staticmethod
+    def _record_price_observations(product: str, result: dict) -> list[dict]:
+        """Store the visible prices of this scan and return the price history.
+
+        Observations are facts about what a public page showed on a given
+        date.  They are never used as a price guarantee and never as a
+        profit input.
+        """
+        rows = []
+        for group in result.get("groups", []):
+            for row in group.get("rows", []):
+                rows.append({
+                    "product": product,
+                    "config": row.get("configKey", ""),
+                    "platformId": row.get("platformId", ""),
+                    "platform": row.get("platform", ""),
+                    "price": row.get("priceLow"),
+                    "currency": row.get("currency", ""),
+                    "url": row.get("url", ""),
+                    "observedAt": row.get("observedAt", ""),
+                    "recordedAt": utc_now(),
+                    "secondHand": bool(row.get("secondHand", False)),
+                })
+        for row in (result.get("crossBorder") or {}).get("rows", []):
+            rows.append({
+                "product": product,
+                "config": row.get("configKey", ""),
+                "platformId": row.get("platformId", ""),
+                "platform": row.get("platform", ""),
+                "price": row.get("priceLow"),
+                "currency": row.get("currency", ""),
+                "url": row.get("url", ""),
+                "observedAt": row.get("observedAt", ""),
+                "recordedAt": utc_now(),
+                "secondHand": bool(row.get("secondHand", False)),
+            })
+
+        def save(data):
+            observations = data.setdefault("priceObservations", [])
+            observations.extend(rows)
+            history = [item for item in observations if item.get("product") == product]
+            return history[-60:]
+
+        return STORE.update(save)
 
     @staticmethod
     def _fail_agent_chat(run_id: str, conversation_id: str, message: str) -> None:

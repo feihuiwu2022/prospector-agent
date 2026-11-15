@@ -109,6 +109,61 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertIsNotNone(result["crossBorder"])
         self.assertIn("汇率", result["crossBorder"]["note"])
 
+    def test_cross_market_pairs_keep_both_currencies(self) -> None:
+        jp_rows = [
+            {
+                "ref": "J1",
+                "platformId": "amazon_jp",
+                "title": "OPPO K13s 12GB+256GB",
+                "url": "https://www.amazon.co.jp/dp/B0TEST",
+                "snippet": "価格 32,800円 12GB+256GB",
+            },
+        ]
+        pricegap.search_many = lambda plan: list(FIXTURE) + list(jp_rows)
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "日本")
+        cross = result["crossBorder"]
+        self.assertEqual(cross["sourceCountry"], "日本")
+        self.assertTrue(cross["rows"])
+        self.assertTrue(cross["pairs"])
+        pair = cross["pairs"][0]
+        self.assertEqual(pair["sourceCurrency"], "JPY")
+        self.assertEqual(pair["targetCurrency"], "CNY")
+        candidates = pricegap.build_price_gap_candidates(
+            "OPPO K13s", result, {"market": "中国", "sourcingCountry": "日本"}
+        )
+        cross_candidate = next(item for item in candidates if "跨市场价差" in item["name"])
+        self.assertEqual(cross_candidate["assumptions"]["sellingCurrency"], "CNY")
+        self.assertEqual(cross_candidate["assumptions"]["purchaseCurrency"], "JPY")
+
+    def test_unified_profit_model_requires_fees_and_fx(self) -> None:
+        from prospector.domain import calculate_profit
+
+        same_currency = {
+            "sellingPrice": 2099,
+            "sellingCurrency": "CNY",
+            "purchasePrice": 1899,
+            "purchaseCurrency": "CNY",
+        }
+        incomplete = calculate_profit(same_currency)
+        self.assertFalse(incomplete["complete"])
+        self.assertIn("referralRate", incomplete["missingFields"])
+        filled = calculate_profit({**same_currency, "referralRate": 0.05, "adCost": 50, "fulfillmentCost": 15, "returnReserveRate": 0.02})
+        self.assertTrue(filled["complete"])
+        self.assertEqual(filled["currency"], "CNY")
+        self.assertAlmostEqual(filled["contributionProfit"], 2099 - 1899 - 2099 * 0.05 - 50 - 15 - 2099 * 0.02, places=2)
+
+        cross_currency = {
+            "sellingPrice": 2099,
+            "sellingCurrency": "CNY",
+            "purchasePrice": 32800,
+            "purchaseCurrency": "JPY",
+        }
+        blocked = calculate_profit(cross_currency)
+        self.assertFalse(blocked["complete"])
+        self.assertIn("fxRate", blocked["missingFields"])
+        self.assertIn("inboundCost", blocked["missingFields"])
+        self.assertIn("dutyTaxCost", blocked["missingFields"])
+
     def test_candidates_are_created_with_the_observed_prices_only(self) -> None:
         from prospector.domain import calculate_profit
 
@@ -119,8 +174,9 @@ class PriceGapScanTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         candidate = candidates[0]
         self.assertEqual(candidate["assumptions"]["sellingPrice"], 2099.0)
+        self.assertEqual(candidate["assumptions"]["sellingCurrency"], "CNY")
         self.assertEqual(candidate["assumptions"]["purchasePrice"], 1899.0)
-        self.assertEqual(candidate["assumptions"]["currency"], "CNY")
+        self.assertEqual(candidate["assumptions"]["purchaseCurrency"], "CNY")
         # Fees are never guessed, so the profit model stays incomplete.
         profit = calculate_profit(candidate["assumptions"])
         self.assertFalse(profit["complete"])

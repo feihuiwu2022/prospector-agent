@@ -25,6 +25,7 @@ DEFAULT_STATE = {
     "profile": DEFAULT_PROFILE,
     "discoveryRuns": [],
     "conversations": [],
+    "priceObservations": [],
 }
 
 

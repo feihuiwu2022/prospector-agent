@@ -149,49 +149,124 @@ def calculate_profit(assumptions: dict) -> dict:
     }
 
 
-def calculate_same_currency_profit(assumptions: dict) -> dict:
-    """Profit inside one currency, used for domestic platform price gaps."""
-    missing = [
-        key
-        for key in (
-            "sellingPrice",
-            "purchasePrice",
-            "currency",
-            "referralRate",
-            "adCost",
-            "fulfillmentCost",
-            "returnReserveRate",
-        )
-        if assumptions.get(key) in (None, "")
-    ]
+UNIFIED_PROFIT_FIELDS = (
+    "sellingPrice",
+    "sellingCurrency",
+    "purchasePrice",
+    "purchaseCurrency",
+    "referralRate",
+    "adCost",
+    "fulfillmentCost",
+    "returnReserveRate",
+)
+
+CROSS_CURRENCY_FIELDS = ("fxRate", "inboundCost", "dutyTaxCost")
+
+
+def calculate_profit(assumptions: dict) -> dict:
+    """Pick the profit model that matches the recorded assumptions.
+
+    Two models exist: the unified one (any currency pair, used by the price
+    gap scanner) and the original JPY-only model kept for candidates that
+    were saved with the legacy field names.  Neither model ever fills a
+    missing input with a default.
+    """
+    if assumptions.get("sellingPrice") not in (None, ""):
+        return calculate_unified_profit(assumptions)
+    missing = [key for key in PROFIT_FIELDS if assumptions.get(key) in (None, "")]
     if missing:
-        return {"complete": False, "missingFields": missing, "model": "same_currency"}
-    currency = str(assumptions.get("currency", "")).upper()
-    if currency not in {"CNY", "JPY"}:
-        return {"complete": False, "missingFields": ["currency"], "model": "same_currency"}
+        return {"complete": False, "missingFields": missing}
+
+    values = {key: float(assumptions[key]) for key in PROFIT_FIELDS}
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ValueError("利润假设必须是有效数字。")
+    if any(value < 0 for value in values.values()):
+        raise ValueError("成本、价格和费率不能小于 0。")
+    if values["sellingPriceJpy"] <= 0 or values["cnyToJpy"] <= 0:
+        raise ValueError("售价和汇率必须大于 0。")
+    if values["referralRate"] < 0 or values["referralRate"] > 1:
+        raise ValueError("佣金率必须在 0 到 1 之间。")
+    if values["returnReserveRate"] < 0 or values["returnReserveRate"] > 1:
+        raise ValueError("退货预留率必须在 0 到 1 之间。")
+
+    price = values["sellingPriceJpy"]
+    costs = {
+        "采购成本": values["purchasePriceCny"] * values["cnyToJpy"],
+        "头程": values["inboundJpy"],
+        "关税及进口税费": values["dutyTaxJpy"],
+        "FBA 费用": values["fbaFeeJpy"],
+        "平台佣金": price * values["referralRate"],
+        "广告": values["adCostJpy"],
+        "退货预留": price * values["returnReserveRate"],
+        "其他": values["otherCostJpy"],
+    }
+    contribution = price - sum(costs.values())
+    remaining_for_ads = price - sum(value for key, value in costs.items() if key != "广告")
+    return {
+        "complete": True,
+        "model": "cross_border_jpy",
+        "currency": "JPY",
+        "sellingPrice": round(price, 2),
+        "costs": {key: round(value, 2) for key, value in costs.items()},
+        "contributionProfit": round(contribution, 2),
+        "contributionMargin": round(contribution / price, 4),
+        "breakEvenAdCost": round(max(0, remaining_for_ads), 2),
+    }
+
+
+def calculate_unified_profit(assumptions: dict) -> dict:
+    """Profit for one scenario, in the selling currency.
+
+    Same-currency scenarios (two platforms of one market) only need the two
+    prices and the fees.  Cross-currency scenarios additionally need the
+    exchange rate and the inbound cost and duty, because no page carries
+    those numbers.
+    """
+    missing = [key for key in UNIFIED_PROFIT_FIELDS if assumptions.get(key) in (None, "")]
+    selling_currency = str(assumptions.get("sellingCurrency", "")).upper()
+    purchase_currency = str(assumptions.get("purchaseCurrency", "")).upper()
+    if selling_currency and selling_currency not in {"CNY", "JPY"}:
+        missing.append("sellingCurrency")
+    if purchase_currency and purchase_currency not in {"CNY", "JPY"}:
+        missing.append("purchaseCurrency")
+    if selling_currency and purchase_currency and selling_currency != purchase_currency:
+        missing.extend(key for key in CROSS_CURRENCY_FIELDS if assumptions.get(key) in (None, ""))
+    if missing:
+        return {"complete": False, "missingFields": list(dict.fromkeys(missing)), "model": "unified"}
 
     price = _finite(assumptions["sellingPrice"], "售价")
     purchase = _finite(assumptions["purchasePrice"], "采购价")
     if price <= 0 or purchase < 0:
-        return {"complete": False, "missingFields": ["sellingPrice", "purchasePrice"], "model": "same_currency"}
+        return {"complete": False, "missingFields": ["sellingPrice", "purchasePrice"], "model": "unified"}
 
-    referral_rate = _rate(assumptions.get("referralRate", 0))
-    return_rate = _rate(assumptions.get("returnReserveRate", 0))
+    referral_rate = _rate(assumptions["referralRate"])
+    return_rate = _rate(assumptions["returnReserveRate"])
+    purchase_in_selling_currency = purchase
+    if selling_currency != purchase_currency:
+        fx_rate = _finite(assumptions["fxRate"], "汇率")
+        if fx_rate <= 0:
+            return {"complete": False, "missingFields": ["fxRate"], "model": "unified"}
+        purchase_in_selling_currency = purchase * fx_rate
+
     costs = {
-        "采购成本": purchase,
+        "采购成本": purchase_in_selling_currency,
         "平台佣金": price * referral_rate,
         "广告": _finite(assumptions.get("adCost", 0) or 0, "广告成本"),
         "履约/运费": _finite(assumptions.get("fulfillmentCost", 0) or 0, "履约费用"),
         "退货预留": price * return_rate,
         "其他成本": _finite(assumptions.get("otherCost", 0) or 0, "其他成本"),
     }
+    if selling_currency != purchase_currency:
+        costs["头程与入仓"] = _finite(assumptions.get("inboundCost", 0) or 0, "头程费用")
+        costs["关税及进口税费"] = _finite(assumptions.get("dutyTaxCost", 0) or 0, "关税及进口税费")
     contribution = price - sum(costs.values())
     remaining_for_ads = price - sum(value for key, value in costs.items() if key != "广告")
     return {
         "complete": True,
-        "model": "same_currency",
-        "currency": currency,
+        "model": "unified",
+        "currency": selling_currency,
         "sellingPrice": round(price, 2),
+        "purchasePriceInSellingCurrency": round(purchase_in_selling_currency, 2),
         "costs": {key: round(value, 2) for key, value in costs.items()},
         "contributionProfit": round(contribution, 2),
         "contributionMargin": round(contribution / price, 4),
