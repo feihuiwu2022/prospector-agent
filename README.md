@@ -1,16 +1,28 @@
 # Prospector Agent
 
+[![CI](https://github.com/feihuiwu2022/prospector-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/feihuiwu2022/prospector-agent/actions/workflows/ci.yml)
+
 拾品是一个日本市场、中国供应链方向的 Agent 选品研究工作台。本地主线是“Agent 找品，人审核结果”。
 
 ## 运行
 
-需要 Python 3.10+；服务端业务代码使用 Python 标准库。
+需要 Python 3.11+；服务端业务代码使用 Python 标准库，无需安装依赖。
 
 ```bash
 python3 server.py
 ```
 
 默认打开 http://127.0.0.1:8000。数据存放在 `data/prospector.json`。MiniMax 配置从 `MINIMAX_API_KEY` 或 `~/.pi/agent/auth.json` 读取；模型/API 地址从 `~/.pi/agent/models.json` 读取。凭证不返回到浏览器。
+
+## 验证
+
+冒烟测试只用标准库，不依赖模型密钥或网络，会真实启动服务并检查接口契约：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+GitHub Actions 在 push 与 PR 上运行三个任务：Python 3.11/3.12 冒烟测试、真实启动服务并检查 `/api/bootstrap` 与静态资源、前端 `app.js` 语法检查。
 
 ## 产品主线
 

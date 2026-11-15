@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: 冒烟测试 · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 运行冒烟测试
+        run: python -m unittest discover -s tests -v
+
+  live:
+    name: 启动服务并检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 启动本地服务并检查接口
+        run: |
+          PROSPECTOR_PORT=8000 PROSPECTOR_DATA_PATH="$RUNNER_TEMP/prospector.json" python server.py &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/api/bootstrap > /dev/null; then break; fi
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8000/api/bootstrap -o "$RUNNER_TEMP/bootstrap.json"
+          python -c "import json; d=json.load(open('$RUNNER_TEMP/bootstrap.json')); assert len(d['discoveryStrategies'])==4; assert len(d['workflowStages'])==6; assert len(d['platforms'])>=10; assert d['profile']['sourcingPlatforms']; print('bootstrap ok')"
+          curl -sf -o /dev/null -w 'home %{http_code}\n' http://127.0.0.1:8000/
+          curl -sf -o /dev/null -w 'app.js %{http_code}\n' http://127.0.0.1:8000/app.js
+          curl -sf -o /dev/null -w 'styles.css %{http_code}\n' http://127.0.0.1:8000/styles.css
+
+  frontend:
+    name: 前端语法检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 检查 app.js 语法
+        run: node --check public/app.js
