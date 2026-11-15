@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import math
 import mimetypes
@@ -28,7 +31,22 @@ from prospector.agent_pricegap import (
 )
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
-from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
+from prospector.platforms import (
+    MARKETS,
+    PLATFORMS,
+    default_platform_for_market,
+    market_group_catalog,
+    sales_channels,
+    supply_markets,
+)
+from prospector.imports import (
+    MAX_FILE_BYTES,
+    PRICE_RULES,
+    normalize_rows,
+    parse_table,
+    pick_price,
+    summarize,
+)
 from prospector.domain import (
     COST_CHECK_TARGETS,
     EVIDENCE_DIMENSION_LABELS,
@@ -68,14 +86,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def parse_json(handler: BaseHTTPRequestHandler) -> dict:
+def parse_json(handler: BaseHTTPRequestHandler, max_bytes: int = 1_000_000) -> dict:
     try:
         length = int(handler.headers.get("Content-Length", "0"))
     except ValueError as exc:
         raise ValueError("请求长度无效。") from exc
     if length <= 0:
         return {}
-    if length > 1_000_000:
+    if length > max_bytes:
         raise ValueError("请求内容过大。")
     try:
         value = json.loads(handler.rfile.read(length).decode("utf-8"))
@@ -209,7 +227,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
-            self.handle_api_post(urlparse(self.path).path, parse_json(self))
+            path = urlparse(self.path).path
+            # An uploaded quote file arrives as base64, so this one endpoint
+            # accepts a larger body than the rest of the API.
+            limit = 8_000_000 if path == "/api/imports" else 1_000_000
+            self.handle_api_post(path, parse_json(self, limit))
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
         except Exception as exc:  # Keep unexpected errors useful to the local prototype.
@@ -224,6 +246,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "服务器处理失败。", "detail": str(exc)})
 
     def do_DELETE(self) -> None:
+        import_match = re.fullmatch(r"/api/imports/([\w-]+)", urlparse(self.path).path)
+        if import_match:
+            self.delete_import(import_match.group(1))
+            return
         match = re.fullmatch(r"/api/candidates/([\w-]+)", urlparse(self.path).path)
         if not match:
             self.send_json(404, {"error": "没有找到这个接口。"})
@@ -280,6 +306,8 @@ class Handler(BaseHTTPRequestHandler):
                     for item in data.get("rfqs", [])
                 ],
                 "purchaseOrders": data.get("purchaseOrders", []),
+                "imports": sorted(data.get("imports", []), key=lambda item: item.get("importedAt", ""), reverse=True),
+                "priceRules": [{"id": key, "label": label} for key, label in PRICE_RULES.items()],
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
@@ -299,6 +327,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/metrics":
             self.send_json(200, self.build_metrics(data))
+            return
+        if path == "/api/imports":
+            self.send_json(200, {
+                "imports": sorted(data.get("imports", []), key=lambda item: item.get("importedAt", ""), reverse=True),
+                "priceRules": [{"id": key, "label": label} for key, label in PRICE_RULES.items()],
+            })
             return
         if path == "/api/discovery":
             self.send_json(200, {
@@ -338,6 +372,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/purchase-orders":
             self.create_purchase_order(body)
+            return
+        if path == "/api/imports":
+            self.create_import(body)
             return
         quote_match = re.fullmatch(r"/api/rfqs/([\w-]+)/quotes", path)
         if quote_match:
@@ -1236,6 +1273,290 @@ class Handler(BaseHTTPRequestHandler):
 
         saved = STORE.update(save)
         self.send_json(201, saved)
+
+    def create_import(self, body: dict) -> None:
+        """Import an authorized quote export as hard sourcing data.
+
+        The file is the operator's own export from a platform they hold
+        credentials for.  Rows become evidence, price observations and
+        supplier quotes; the selected price can also enter the profit model.
+        Nothing is downloaded and no account is touched.
+        """
+        file_name = str(body.get("fileName", "")).strip()[:200]
+        if not file_name:
+            raise ValueError("请提供导入文件名。")
+        content = b""
+        raw = body.get("contentBase64")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                content = base64.b64decode(raw, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("文件内容不是有效的 Base64。") from exc
+        elif isinstance(body.get("contentText"), str) and body.get("contentText").strip():
+            content = body["contentText"].encode("utf-8")
+        if not content:
+            raise ValueError("导入文件是空的。")
+        if len(content) > MAX_FILE_BYTES:
+            raise ValueError("文件超过 5MB，请只保留需要的列或分批导入。")
+
+        platform = str(body.get("platform", "")).strip()[:40]
+        if platform not in PLATFORMS:
+            raise ValueError("请选择这个文件所属的平台。")
+        candidate_id = str(body.get("candidateId", "")).strip()[:64]
+        raw_targets = body.get("targets")
+        if isinstance(raw_targets, list) and raw_targets:
+            targets = [
+                str(item).strip()
+                for item in raw_targets
+                if str(item).strip() in {"evidence", "assumptions", "suppliers", "observations"}
+            ]
+        else:
+            targets = ["observations", "suppliers"]
+        if not targets:
+            raise ValueError("请选择至少一种导入用途。")
+        if ("evidence" in targets or "assumptions" in targets) and not candidate_id:
+            raise ValueError("写入证据或利润模型需要先选择候选。")
+        price_rule = str(body.get("priceRule", "lowest")).strip()
+        if price_rule not in PRICE_RULES:
+            raise ValueError("报价取值规则无效。")
+        observed_at = str(body.get("observedAt", "")).strip()[:10] or date.today().isoformat()
+        try:
+            date.fromisoformat(observed_at)
+        except ValueError as exc:
+            raise ValueError("采集日期必须使用 YYYY-MM-DD 格式。") from exc
+
+        headers, rows = parse_table(file_name, content)
+        if not headers:
+            raise ValueError("没有读到表头，请确认文件第一行是列名。")
+        records, warnings = normalize_rows(headers, rows, platform)
+        if not records:
+            detail = "；".join(warnings[:3]) or "文件里没有可用的报价行。"
+            raise ValueError(f"没有读到可用的报价行：{detail}")
+        if len(records) > 2000:
+            raise ValueError("单次最多导入 2000 行，请按供应商或商品拆分后再导入。")
+        digest = hashlib.sha256(content).hexdigest()
+
+        def save(data):
+            if any(item.get("sha256") == digest for item in data.get("imports", [])):
+                return None, "duplicate"
+            now = utc_now()
+            import_id = str(uuid4())
+            platform_name = PLATFORMS[platform]["name"]
+            applied = {"evidence": 0, "observations": 0, "suppliers": 0, "assumptions": None}
+            previous_assumptions: dict = {}
+
+            candidate = find_candidate(data, candidate_id) if candidate_id else None
+            if candidate_id and candidate is None:
+                return None, "missing_candidate"
+
+            if "evidence" in targets and candidate is not None:
+                for record in records:
+                    details = [
+                        f"授权文件导入：{file_name}",
+                        f"平台 {record['platform']}",
+                        f"供应商 {record['seller'] or '未标注'}",
+                        f"单价 {record['unitPrice']} {record['currency']}",
+                        f"MOQ {record['moq'] if record['moq'] is not None else '未填'}",
+                        f"交期 {record['leadTimeDays'] if record['leadTimeDays'] is not None else '未填'} 天",
+                    ]
+                    if record.get("spec"):
+                        details.append(f"规格 {record['spec']}")
+                    for key, value in (record.get("attributes") or {}).items():
+                        details.append(f"{key} {value}")
+                    if record.get("note"):
+                        details.append(f"备注 {record['note']}")
+                    candidate.setdefault("evidence", []).append({
+                        "id": str(uuid4()),
+                        "dimension": "sourcing",
+                        "title": f"{platform_name} 授权报价 · {record['title']}"[:240],
+                        "sourceType": "授权文件导入",
+                        "url": record["url"] or f"import://{import_id}",
+                        "observedAt": record["observedAt"] or observed_at,
+                        "note": "；".join(details)[:4000],
+                        "importId": import_id,
+                        "createdAt": now,
+                    })
+                    applied["evidence"] += 1
+
+            if "observations" in targets:
+                observations = data.setdefault("priceObservations", [])
+                for record in records:
+                    observations.append({
+                        "product": record["title"],
+                        "config": record.get("spec", ""),
+                        "platformId": platform,
+                        "platform": record["platform"],
+                        "price": record["unitPrice"],
+                        "currency": record["currency"],
+                        "url": record["url"],
+                        "observedAt": record["observedAt"] or observed_at,
+                        "recordedAt": now,
+                        "secondHand": False,
+                        "importId": import_id,
+                    })
+                    applied["observations"] += 1
+
+            if "suppliers" in targets:
+                suppliers = data.setdefault("suppliers", [])
+                for record in records:
+                    seller = record["seller"]
+                    if not seller:
+                        continue
+                    existing = next(
+                        (
+                            item for item in suppliers
+                            if item.get("platform") == record["platform"] and item.get("seller") == seller
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        existing = {
+                            "id": str(uuid4()),
+                            "platform": record["platform"],
+                            "seller": seller,
+                            "url": record["url"],
+                            "products": [],
+                            "note": "",
+                            "status": "已报价",
+                            "lastPrice": None,
+                            "lastCurrency": "",
+                            "lastObservedAt": "",
+                            "quoteHistory": [],
+                            "createdAt": now,
+                            "updatedAt": now,
+                        }
+                        suppliers.append(existing)
+                    history = existing.setdefault("quoteHistory", [])
+                    history.append({
+                        "unitPrice": record["unitPrice"],
+                        "currency": record["currency"],
+                        "moq": record["moq"],
+                        "leadTimeDays": record["leadTimeDays"],
+                        "invoice": "",
+                        "note": record.get("note", "")[:300],
+                        "product": record["title"],
+                        "source": "授权文件导入",
+                        "importId": import_id,
+                        "recordedAt": now,
+                    })
+                    existing["lastPrice"] = record["unitPrice"]
+                    existing["lastCurrency"] = record["currency"]
+                    existing["lastObservedAt"] = record["observedAt"] or observed_at
+                    if record["title"] and record["title"] not in existing["products"]:
+                        existing["products"].append(record["title"])
+                    if existing.get("status") in {"待联系", "已联系"}:
+                        existing["status"] = "已报价"
+                    if record["url"]:
+                        existing["url"] = record["url"]
+                    existing["updatedAt"] = now
+                    applied["suppliers"] += 1
+
+            if "assumptions" in targets and candidate is not None:
+                chosen = pick_price(records, price_rule)
+                if chosen is not None:
+                    assumptions = candidate.setdefault("assumptions", {})
+                    previous_assumptions = {
+                        "purchasePrice": assumptions.get("purchasePrice"),
+                        "purchaseCurrency": assumptions.get("purchaseCurrency"),
+                    }
+                    assumptions["purchasePrice"] = chosen["unitPrice"]
+                    assumptions["purchaseCurrency"] = chosen["currency"]
+                    applied["assumptions"] = {
+                        "field": "purchasePrice",
+                        "value": chosen["unitPrice"],
+                        "currency": chosen["currency"],
+                        "rule": price_rule,
+                        "ruleLabel": PRICE_RULES[price_rule],
+                        "title": chosen["title"],
+                        "seller": chosen["seller"],
+                    }
+
+            if candidate is not None:
+                candidate["updatedAt"] = now
+                refresh_task_statuses(candidate)
+                advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
+
+            record = {
+                "id": import_id,
+                "fileName": file_name,
+                "platform": platform,
+                "platformName": platform_name,
+                "candidateId": candidate_id,
+                "targets": targets,
+                "priceRule": price_rule,
+                "sha256": digest,
+                "importedAt": now,
+                "rowCount": len(records),
+                "summary": summarize(records),
+                "warnings": warnings[:20],
+                "applied": applied,
+                "previousAssumptions": previous_assumptions,
+                "sample": records[:5],
+            }
+            data.setdefault("imports", []).append(record)
+            return record, "ok"
+
+        result, status = STORE.update(save)
+        if status == "duplicate":
+            self.send_json(409, {"error": "这个文件已经导入过了。重复导入会让证据和报价重复计数；如需重来，请先删除那条导入记录。"})
+            return
+        if status == "missing_candidate":
+            self.send_json(404, {"error": "没有找到这个候选。"})
+            return
+        candidate = find_candidate(STORE.read(), candidate_id) if candidate_id else None
+        self.send_json(201, {
+            "import": result,
+            "candidate": candidate_view(candidate, STORE.read().get("profile", DEFAULT_PROFILE)) if candidate else None,
+        })
+
+    def delete_import(self, import_id: str) -> None:
+        """Remove an import together with everything it wrote."""
+
+        def remove(data):
+            record = next((item for item in data.get("imports", []) if item.get("id") == import_id), None)
+            if record is None:
+                return None
+            for candidate in data.get("candidates", []):
+                candidate["evidence"] = [
+                    item for item in candidate.get("evidence", [])
+                    if item.get("importId") != import_id
+                ]
+            data["priceObservations"] = [
+                item for item in data.get("priceObservations", [])
+                if item.get("importId") != import_id
+            ]
+            for supplier in data.get("suppliers", []):
+                history = supplier.get("quoteHistory") or []
+                kept = [item for item in history if item.get("importId") != import_id]
+                if len(kept) == len(history):
+                    continue
+                supplier["quoteHistory"] = kept
+                if kept:
+                    last = kept[-1]
+                    supplier["lastPrice"] = last.get("unitPrice")
+                    supplier["lastCurrency"] = last.get("currency", "")
+                    supplier["lastObservedAt"] = str(last.get("recordedAt", ""))[:10]
+                else:
+                    supplier["lastPrice"] = None
+                    supplier["lastCurrency"] = ""
+                    supplier["lastObservedAt"] = ""
+                supplier["updatedAt"] = utc_now()
+            candidate = find_candidate(data, record.get("candidateId", ""))
+            if candidate is not None:
+                assumptions = candidate.setdefault("assumptions", {})
+                for field, value in (record.get("previousAssumptions") or {}).items():
+                    if value in (None, ""):
+                        assumptions.pop(field, None)
+                    else:
+                        assumptions[field] = value
+                candidate["updatedAt"] = utc_now()
+            data["imports"] = [
+                item for item in data.get("imports", []) if item.get("id") != import_id
+            ]
+            return record
+
+        result = STORE.update(remove)
+        self.send_json(200 if result else 404, result or {"error": "没有找到这条导入记录。"})
 
     def create_discovery_run(self, body: dict) -> None:
         trigger = str(body.get("trigger", "")).strip()

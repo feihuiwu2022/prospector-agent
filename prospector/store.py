@@ -48,6 +48,7 @@ DEFAULT_STATE = {
     "suppliers": [],
     "rfqs": [],
     "purchaseOrders": [],
+    "imports": [],
 }
 
 

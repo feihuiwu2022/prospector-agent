@@ -50,6 +50,21 @@ function sourceMarketOptions(selected) {
   const list = markets.length ? markets : ["中国"];
   return list.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("");
 }
+
+function importPlatformOptions(selected) {
+  const items = (state.connectors || []).filter((item) => platformRoles(item).includes("sourcing"));
+  if (!items.length) return '<option value="1688">1688</option>';
+  return items.map((item) => `<option value="${esc(item.id)}" ${item.id === selected ? "selected" : ""}>${esc(item.platform)}</option>`).join("");
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("文件读取失败。"));
+    reader.readAsDataURL(file);
+  });
+}
 const modalRoot = document.querySelector("#modal-root");
 const notice = document.querySelector("#notice");
 const activeDiscoveryWatchers = new Set();
@@ -1341,6 +1356,24 @@ function renderDiscovery() {
     }[role];
     return `<section class="panel"><div class="panel-head"><div><h3>${title}</h3><small>${hint}</small></div><span class="connector-count">${items.length} 个平台</span></div><div class="connector-grid">${cards}</div></section>`;
   }).join("");
+  const importCandidates = (state.candidates || [])
+    .map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`)
+    .join("");
+  const importRules = (state.priceRules || [])
+    .map((item) => `<option value="${esc(item.id)}">${esc(item.label)}</option>`)
+    .join("");
+  const importToday = new Date().toISOString().slice(0, 10);
+  const importHistory = (state.imports || []).length
+    ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>文件</th><th>平台</th><th>行数</th><th>写入</th><th>时间</th><th></th></tr></thead><tbody>${(state.imports || []).map((item) => `<tr>
+          <td><b>${esc(item.fileName)}</b><small>${esc((item.warnings && item.warnings[0]) || "")}</small></td>
+          <td>${esc(item.platformName || item.platform)}</td>
+          <td>${Number(item.rowCount || 0)}</td>
+          <td>证据 ${Number((item.applied || {}).evidence || 0)} · 线索 ${Number((item.applied || {}).observations || 0)} · 货源 ${Number((item.applied || {}).suppliers || 0)}${((item.applied || {}).assumptions ? " · 采购价 " + esc(item.applied.assumptions.value) + " " + esc(item.applied.assumptions.currency) : "")}</td>
+          <td>${esc(fmtDate(item.importedAt))}</td>
+          <td><button class="button-quiet" data-action="delete-import" data-id="${esc(item.id)}">撤销</button></td>
+        </tr>`).join("")}</tbody></table></div>`
+    : `<div class="table-empty" style="padding:18px"><h3>还没有导入记录</h3><p>从平台后台导出报价文件后在这里导入，每一次导入都会留痕。</p></div>`;
+
   const runs = state.discoveryRuns.slice(0, 20).map((run) => {
     const strategy = state.discoveryStrategies.find((item) => item.id === run.strategyId);
     const modeTitle = ({ automatic_selection: "自动选品", manual_selection: "手动选品", competitor_analysis: "手动竞品分析" })[run.mode];
@@ -1353,6 +1386,32 @@ function renderDiscovery() {
     <div class="page-heading"><div><h1>Agent 搜索与数据源</h1><p>Agent 自动搜索公开网页；官方平台 API 在获得对应权限后再接入。</p></div><button class="button-quiet" data-action="home">返回 Agent 选品</button></div>
     <section class="agent-intro"><div><span class="agent-live-dot ${webSearch.configured ? "" : "offline"}"></span><b>${webSearch.configured ? "MiniMax Web Search 已连接" : "MiniMax Web Search 未配置"}</b><p>${esc(webSearch.message || "检查本机 MiniMax 配置。")}</p></div><span class="agent-model">${esc(state.llmProvider?.model || "MiniMax")}</span></section>
     <section class="source-boundary-grid"><article><b>现在可用</b><p>Agent 可按策略搜索 Google Trends、TikTok、抖音、快手、Amazon.co.jp、乐天、Yahoo! Shopping、1688、淘宝、京东、拼多多等公开页面线索，并附来源 URL 与采集时间。</p></article><article><b>仍需官方授权</b><p>趋势序列、平台热销榜、商品详情/实时价格、账号数据、直播与投放数据、MOQ 与阶梯报价等，需要各平台官方应用与对应接口权限。</p></article></section>
+    <section class="panel import-panel">
+      <div class="panel-head">
+        <div><h3>授权文件导入</h3><small>把平台后台导出的报价 CSV/Excel 当硬数据用：不需要开发者资质，文件只在本机解析</small></div>
+        <span class="connector-count">${Number((state.imports || []).length)} 次导入</span>
+      </div>
+      <form id="import-form">
+        <div class="form-grid">
+          <div class="field full"><label for="import-file">报价文件（.csv / .tsv / .xlsx）</label><input id="import-file" name="file" type="file" accept=".csv,.tsv,.txt,.xlsx" required /></div>
+          <div class="field"><label for="import-platform">文件所属平台</label><select id="import-platform" name="platform">${importPlatformOptions("1688")}</select></div>
+          <div class="field"><label for="import-candidate">写入到候选（证据 / 利润模型需要）</label><select id="import-candidate" name="candidateId"><option value="">— 只入库，不写候选 —</option>${importCandidates}</select></div>
+          <div class="field"><label for="import-rule">取价规则</label><select id="import-rule" name="priceRule">${importRules}</select></div>
+          <div class="field"><label for="import-observed">采集日期</label><input id="import-observed" name="observedAt" type="date" value="${importToday}" /></div>
+          <div class="field full"><label>导入用途</label>
+            <div class="import-targets">
+              <label><input type="checkbox" name="targets" value="evidence" checked /> 写入候选证据（供应链）</label>
+              <label><input type="checkbox" name="targets" value="assumptions" checked /> 写入利润模型的采购价</label>
+              <label><input type="checkbox" name="targets" value="suppliers" checked /> 更新货源档案与报价历史</label>
+              <label><input type="checkbox" name="targets" value="observations" checked /> 记入货源线索库</label>
+            </div>
+          </div>
+        </div>
+        <div class="form-actions" style="margin-top:12px"><button class="button-primary" type="submit">导入文件</button></div>
+      </form>
+      <div class="bottom-note"><span>ⓘ</span><span>列名不拘：商品名称 / 单价 / 起订量 / 交期 / 商品链接等中文表头和英文表头都能识别；读不出的行会跳过并逐条说明。内容只发到本机服务，不上传到任何地方。</span></div>
+      ${importHistory}
+    </section>
     ${roleGroups}
     <section class="panel"><div class="panel-head"><div><h3>Agent 选品运行记录</h3><small>每次扫描保留策略、运行状态、结果数量与时间</small></div></div><div class="discovery-run-list">${runs || `<div class="table-empty" style="padding:22px"><h3>暂无 Agent 运行</h3><p>回到工作台，从四大策略中启动一次自动选品。</p></div>`}</div></section>
     <div class="bottom-note"><span>ⓘ</span><span>仅 MiniMax Web Search 产生公开搜索摘要；系统不模拟登录、不绕过访问限制，也不会把摘要称作销量或真实成交价。</span></div>
@@ -1524,6 +1583,14 @@ document.addEventListener("click", async (event) => {
     if (action === "discovery") { state.view = "discovery"; state.selectedId = null; render(); return; }
     if (action === "board") { state.view = "board"; state.selectedId = null; render(); return; }
     if (action === "metrics") { state.view = "metrics"; state.selectedId = null; render(); return; }
+    if (action === "delete-import") {
+      const importId = button.dataset.id;
+      if (!window.confirm("撤销这次导入？它写入的证据、报价和线索会一并删除。")) return;
+      await api("/api/imports/" + importId, { method: "DELETE" });
+      await refresh();
+      toast("导入已撤销。");
+      return;
+    }
     if (action === "new") { showNewModal(); return; }
     if (action === "edit-candidate") { const candidate = currentCandidate(); if (candidate) showEditModal(candidate); return; }
     if (action === "close-modal" || action === "backdrop-close") { closeModal(); return; }
@@ -1931,6 +1998,30 @@ document.addEventListener("submit", async (event) => {
       await refresh();
       toast("Agent 已接收任务，正在搜索并整理结果。");
       watchAgentDiscovery(response.run.id);
+      return;
+    }
+    if (form.id === "import-form") {
+      const fileInput = form.querySelector("#import-file");
+      const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+      if (!file) { toast("先选一个报价文件。", true); return; }
+      const targets = data.getAll("targets").map(String);
+      if (!targets.length) { toast("至少选一种导入用途。", true); return; }
+      const contentBase64 = await fileToBase64(file);
+      const response = await api("/api/imports", {
+        method: "POST",
+        body: JSON.stringify({
+          fileName: file.name,
+          contentBase64,
+          platform: data.get("platform"),
+          candidateId: data.get("candidateId") || "",
+          observedAt: data.get("observedAt"),
+          priceRule: data.get("priceRule"),
+          targets,
+        }),
+      });
+      await refresh();
+      const applied = response.import.applied || {};
+      toast("导入完成：" + response.import.rowCount + " 行，证据 " + (applied.evidence || 0) + " 条，线索 " + (applied.observations || 0) + " 条，货源 " + (applied.suppliers || 0) + " 家。");
       return;
     }
     if (form.id === "create-form") {

@@ -181,6 +181,18 @@ MiniMax 官方 Coding Plan 提供 Web Search MCP。Agent 发起公开网页搜�
 
 开发时遵循官方文档：[MiniMax Web Search MCP](https://platform.minimax.io/docs/m-plan/mcp-guide)、[Google Trends API](https://developers.google.com/search/apis/trends)、[TikTok Research API](https://developers.tiktok.com/products/research-api/)、[抖音开放平台权限](https://open.douyin.com/platform/resource/docs/accession-guide/type-and-permission)、[Amazon SP-API](https://developer-docs.amazon.com/sp-api/docs/onboarding-overview)、[1688 开放平台](https://aop.alibaba.com/)、[淘宝开放平台](https://open.taobao.com/)、[京东零售开放平台](https://open.jd.com/)。
 
+### 授权数据文件导入
+
+拿到平台资质之前，也可以先用自己从官方后台导出的报价文件把硬数据用起来。导入链路是 prospector/imports.py（仅标准库：CSV/TSV 解析 + 用 zipfile 读 .xlsx），接口是 POST /api/imports 与 DELETE /api/imports/{id}，前端入口在「数据源与运行」页。
+
+边界与约束：
+
+- 文件只发到本机服务，解析全在本地完成；系统不下载、不模拟登录、不碰任何账号。
+- 表头按别名映射（中文/英文均可），未识别的列保留为该行属性；读不出价格的行跳过并说明，不猜价。
+- 导入内容写入同一条证据与利润链路：供应链证据、purchasePrice 假设、货源档案的报价历史、价格观察。
+- 文件内容按 SHA-256 去重，重复导入返回 409，避免证据和报价被重复计数。
+- 导入记录保留来源文件、行数、写入去向与跳过原因；撤销时按 importId 回滚所有写入并还原假设。
+
 ## 8. MiniMax 安全与请求生命周期
 
 1. 服务端从 `MINIMAX_API_KEY` 或 `~/.pi/agent/auth.json` 的 provider key 读取凭证；模型和 base URL 从 Pi Agent 配置读取，并验证为受支持的官方 HTTPS host。

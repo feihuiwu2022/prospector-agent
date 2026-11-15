@@ -60,6 +60,9 @@ class ServerSmokeTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         os.environ["PROSPECTOR_DATA_PATH"] = str(Path(cls.tmp.name) / "prospector.json")
         import server  # noqa: PLC0415 - imported after the env var is set
+        # Another test module may have imported the server first, so the
+        # store is pointed at this module's own file either way.
+        server.STORE = server.JsonStore(Path(os.environ["PROSPECTOR_DATA_PATH"]))
 
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
