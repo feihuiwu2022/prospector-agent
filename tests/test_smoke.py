@@ -428,6 +428,63 @@ class ServerSmokeTest(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_purchase_order_receipt_opens_the_actual_cost_step(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "po-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "OPPO K13s 12G+256G",
+                "category": "其他",
+                "hypothesis": "到货回填",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "中国",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {},
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "purchaseChecklist": [],
+                "workflowStages": [
+                    {"id": "sourcing", "number": 3, "title": "寻找货源", "status": "partial", "note": ""},
+                ],
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, po = _post(
+            f"{self.base}/api/purchase-orders",
+            {
+                "candidateId": candidate_id,
+                "platform": "淘宝 / 天猫",
+                "seller": "shop-a.taobao.com",
+                "product": "OPPO K13s",
+                "spec": "12G+256G",
+                "quantity": 60,
+                "unitPrice": 1820,
+                "currency": "CNY",
+                "leadTimeDays": 7,
+            },
+        )
+        self.assertEqual(status, 201)
+        candidate = json.loads(_get(f"{self.base}/api/candidates/{candidate_id}")[2])
+        delivery = [item for item in candidate["purchaseChecklist"] if item["id"] == f"po_{po['id']}_delivery"]
+        self.assertTrue(delivery)
+        self.assertFalse(delivery[0]["done"])
+
+        _post(f"{self.base}/api/purchase-orders/{po['id']}", {"status": "已收货"}, method="PATCH")
+        candidate = json.loads(_get(f"{self.base}/api/candidates/{candidate_id}")[2])
+        ids = {item["id"] for item in candidate["purchaseChecklist"]}
+        self.assertIn(f"po_{po['id']}_actual", ids)
+        delivery = next(item for item in candidate["purchaseChecklist"] if item["id"] == f"po_{po['id']}_delivery")
+        self.assertTrue(delivery["done"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

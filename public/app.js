@@ -1055,6 +1055,7 @@ async function renderMetrics() {
         <article><b>人工审核</b><p>继续 ${metrics.reviews.continue} · 暂缓 ${metrics.reviews.hold} · 淘汰 ${metrics.reviews.reject}。</p></article>
         <article><b>小测与货源</b><p>有真实小测数据 ${metrics.pilot.withData} 个（达标 ${metrics.pilot.passed}）· 货源档案 ${metrics.suppliers.total} 家。</p></article>
         <article><b>询价回收</b><p>询价单 ${metrics.rfqs?.total || 0} 张 · 目标店铺 ${metrics.rfqs?.targets || 0} 家 · 收到书面报价 ${metrics.rfqs?.quotes || 0} 条。</p></article>
+        <article><b>采购单草案</b><p>共 ${metrics.purchaseOrders?.total || 0} 张 · ${Object.entries(metrics.purchaseOrders?.byStatus || {}).map(([key, value]) => `${key} ${value}`).join(" / ") || "暂无"}。</p></article>
       </div>
       <section class="panel"><div class="panel-head"><h3>按策略的候选与审核结果</h3><small>看哪条策略产出的候选更容易被留下</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>策略</th><th>候选</th><th>继续</th><th>暂缓</th><th>淘汰</th></tr></thead><tbody>${strategyRows || `<tr><td colspan="5">暂无数据</td></tr>`}</tbody></table></div></section>
       <section class="panel"><div class="panel-head"><h3>淘汰理由分布</h3><small>下一轮发现可以避开这些坑</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>理由</th><th>次数</th></tr></thead><tbody>${reasonRows || `<tr><td colspan="2">还没有淘汰记录</td></tr>`}</tbody></table></div></section>

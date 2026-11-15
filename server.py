@@ -1011,7 +1011,16 @@ class Handler(BaseHTTPRequestHandler):
             candidate = find_candidate(data, po["candidateId"]) if po["candidateId"] else None
             if candidate is not None:
                 candidate.setdefault("purchaseOrders", []).append(po["id"])
+                checklist = candidate.setdefault("purchaseChecklist", [])
+                checklist.append({
+                    "id": f"po_{po['id']}_delivery",
+                    "item": f"跟进采购单到货与验货：{platform} · {seller} · {quantity:g} 件",
+                    "status": "待执行",
+                    "note": "到货后核对数量、型号与配件，并把实际到货成本填进利润模型。",
+                    "done": False,
+                })
                 candidate["updatedAt"] = now
+                advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
             return po
 
         saved = STORE.update(save)
@@ -1089,6 +1098,10 @@ class Handler(BaseHTTPRequestHandler):
             "suppliers": {
                 "total": len(data.get("suppliers", [])),
                 "byStatus": _count_by(data.get("suppliers", []), "status"),
+            },
+            "purchaseOrders": {
+                "total": len(data.get("purchaseOrders", [])),
+                "byStatus": _count_by(data.get("purchaseOrders", []), "status"),
             },
             "rfqs": {
                 "total": len(data.get("rfqs", [])),
@@ -1484,7 +1497,25 @@ class Handler(BaseHTTPRequestHandler):
                 po["updatedAt"] = utc_now()
                 candidate = find_candidate(data, po.get("candidateId", ""))
                 if candidate is not None:
+                    checklist = candidate.setdefault("purchaseChecklist", [])
+                    delivery_id = f"po_{po['id']}_delivery"
+                    for item in checklist:
+                        if item.get("id") == delivery_id:
+                            if status in {"已发货", "已收货"}:
+                                item["done"] = True
+                                item["status"] = "已跟进"
+                    if status == "已收货":
+                        actual_id = f"po_{po['id']}_actual"
+                        if not any(item.get("id") == actual_id for item in checklist):
+                            checklist.append({
+                                "id": actual_id,
+                                "item": f"录入实际到货数量与总成本：{po.get('platform', '')} · {po.get('seller', '')}",
+                                "status": "待执行",
+                                "note": "把实际到货成本填进利润模型的采购价，运费与关税单独填，不要用草案金额。",
+                                "done": False,
+                            })
                     candidate["updatedAt"] = utc_now()
+                    advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
                 return po
 
             result = STORE.update(update_po)
