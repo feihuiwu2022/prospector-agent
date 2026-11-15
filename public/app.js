@@ -764,8 +764,17 @@ function renderPilotPanel(candidate) {
 function renderCostChecks(candidate) {
   const checks = candidate.costChecks || [];
   if (!checks.length) return "";
-  const rows = checks.map((check) => `<tr><td>${esc(check.label)}</td><td>${esc(check.note || "")}</td></tr>`).join("");
-  return `<div class="report-list"><b>待查成本项（实测与模型存在未归因差额）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>成本项</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">这些项目已自动进入采购待办清单，逐项确认后差异才算查清。</small></div>`;
+  const applied = candidate.costChecksApplied || {};
+  const rows = checks.map((check) => {
+    const done = applied[check.id];
+    const value = done && done.value != null ? Number(done.value) : "";
+    return `<tr>
+      <td><b>${esc(check.label)}</b><small>${esc(check.note || "")}</small></td>
+      <td>${done ? `<span class="status-pill done">已确认${done.field ? ` → ${esc(done.field)}` : ""}</span>` : `<input type="number" min="0" step="0.01" data-cost-value="${esc(check.id)}" value="${value === "" ? "" : esc(value)}" placeholder="金额" />`}</td>
+      <td>${done ? "—" : `<button class="button-quiet" data-action="apply-cost-check" data-id="${esc(check.id)}">写入模型</button> <button class="button-quiet" data-action="close-cost-check" data-id="${esc(check.id)}">确认无此项</button>`}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="report-list"><b>待查成本项（实测与模型存在未归因差额）</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>成本项</th><th>金额</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div><small class="chat-result-foot">这些项目已自动进入采购待办清单，逐项确认后差异才算查清；写入模型会立即重算利润。</small></div>`;
 }
 
 function renderReconciliation(candidate) {
@@ -1235,7 +1244,30 @@ function renderBoard() {
 function renderCandidateComparison() {
   const candidates = (state.candidates || []).filter((item) => item.status !== "archived");
   if (!candidates.length) return "";
-  const rows = candidates.map((candidate) => {
+  const sortKey = state.boardSort || "updated";
+  const value = (candidate) => {
+    const pilot = candidate.pilotReview || {};
+    const profit = candidate.profit || {};
+    const plan = candidate.scalePlan || {};
+    if (sortKey === "actual") {
+      const orders = pilot.metrics?.orders || 0;
+      return orders ? (pilot.metrics?.netProfit || 0) / orders : -Infinity;
+    }
+    if (sortKey === "model") return profit.complete ? Number(profit.contributionProfit) : -Infinity;
+    if (sortKey === "stages") return (candidate.workflowStages || []).filter((stage) => stage.status === "completed").length;
+    if (sortKey === "cash") {
+      const cash = plan.complete && plan.tiers?.length ? Number(plan.tiers[plan.tiers.length - 1].cashUsed ?? 0) : Infinity;
+      return cash;
+    }
+    return String(candidate.updatedAt || "");
+  };
+  const sorted = [...candidates].sort((a, b) => {
+    const left = value(a);
+    const right = value(b);
+    if (typeof left === "string" || typeof right === "string") return String(right).localeCompare(String(left));
+    return right - left;
+  });
+  const rows = sorted.map((candidate) => {
     const stages = candidate.workflowStages || [];
     const done = stages.filter((stage) => stage.status === "completed").length;
     const pilot = candidate.pilotReview || {};
@@ -1256,7 +1288,9 @@ function renderCandidateComparison() {
       <td><button class="button-quiet" data-action="open" data-id="${esc(candidate.id)}">查看</button></td>
     </tr>`;
   }).join("");
-  return `<section class="panel"><div class="panel-head"><h3>候选横向对比</h3><small>同屏比较进度、来源、模型利润、实测单件净利与备货资金</small></div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>候选</th><th>阶段</th><th>来源</th><th>模型单件贡献</th><th>实测单件净利</th><th>备货资金占用</th><th>小测结论</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  const sortOptions = [["updated", "按更新时间"], ["actual", "按实测单件净利"], ["model", "按模型单件贡献"], ["stages", "按阶段完成度"], ["cash", "按备货资金占用"]];
+  const sortSelect = `<label style="margin-left:10px">排序<select data-change="board-sort">${sortOptions.map(([key, label]) => `<option value="${key}" ${sortKey === key ? "selected" : ""}>${label}</option>`).join("")}</select></label>`;
+  return `<section class="panel"><div class="panel-head"><div><h3>候选横向对比</h3><small>同屏比较进度、来源、模型利润、实测单件净利与备货资金</small></div>${sortSelect}</div><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>候选</th><th>阶段</th><th>来源</th><th>模型单件贡献</th><th>实测单件净利</th><th>备货资金占用</th><th>小测结论</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 
 function boardNote(candidate) {
@@ -1679,6 +1713,23 @@ document.addEventListener("click", async (event) => {
       toast("询价单已导出；发给卖家前请自行核对规格与数量。");
       return;
     }
+    if (action === "apply-cost-check" || action === "close-cost-check") {
+      const candidate = currentCandidate();
+      if (!candidate) return;
+      const checkId = button.dataset.id;
+      const raw = String(document.querySelector(`[data-cost-value="${checkId}"]`)?.value || "").trim();
+      const payload = { id: checkId, mode: action === "apply-cost-check" ? "apply" : "close" };
+      if (action === "apply-cost-check") {
+        if (raw === "") { toast("请先填写金额，或用“确认无此项”。", true); return; }
+        payload.value = Number(raw);
+      }
+      await api(`/api/candidates/${encodeURIComponent(candidate.id)}`, { method: "PATCH", body: JSON.stringify({ costCheck: payload }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast(action === "apply-cost-check" ? "成本项已写入利润模型并重算。" : "已标记为无此项，待办同步关闭。");
+      return;
+    }
     if (action === "apply-calibration") {
       const candidate = currentCandidate();
       if (!candidate) return;
@@ -2081,6 +2132,11 @@ document.addEventListener("change", async (event) => {
     } catch (error) {
       toast(error.message, true);
     }
+    return;
+  }
+  if (target.dataset.change === "board-sort") {
+    state.boardSort = target.value;
+    renderBoard();
     return;
   }
   if (target.dataset.change === "board-market") {

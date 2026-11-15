@@ -784,6 +784,18 @@ COST_CATALOG = (
     ("otherCost", "其他单件成本"),
 )
 
+# The assumption field a cost check writes into, so confirming a check can
+# update the profit model instead of only closing a to-do.
+COST_CHECK_TARGETS = {
+    "cost_referralRate": ("referralRate", "平台佣金率", "比例"),
+    "cost_adCost": ("adCost", "广告成本", "每件金额"),
+    "cost_fulfillmentCost": ("fulfillmentCost", "履约与运费", "每件金额"),
+    "cost_returnReserveRate": ("returnReserveRate", "退货预留率", "比例"),
+    "cost_dutyTaxCost": ("dutyTaxCost", "关税及进口税费", "每件金额"),
+    "cost_inboundCost": ("inboundCost", "头程与入仓", "每件金额"),
+    "cost_otherCost": ("otherCost", "其他单件成本", "每件金额"),
+}
+
 SOFT_COST_ITEMS = (
     ("包材与赠品", "包装箱、说明书、赠品、卡片等常被忽略的单件成本。"),
     ("仓储与操作费", "头程之后的入仓、仓储、上架与操作费用。"),

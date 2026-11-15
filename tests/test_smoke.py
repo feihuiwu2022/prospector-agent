@@ -541,6 +541,64 @@ class ServerSmokeTest(unittest.TestCase):
         done = next(item for item in payload["purchaseChecklist"] if item["id"] == "po_x_actual")
         self.assertTrue(done["done"])
 
+    def test_cost_check_can_write_into_the_profit_model(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "cost-check-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "OPPO K13s",
+                "category": "电子",
+                "hypothesis": "成本待查",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "中国",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {"sellingPrice": 2099, "sellingCurrency": "CNY"},
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "purchaseChecklist": [
+                    {"id": "cost_adCost", "item": "核对成本项：广告成本", "status": "待确认", "done": False},
+                    {"id": "soft_0", "item": "核对成本项：包材与赠品", "status": "待确认", "done": False},
+                ],
+                "workflowStages": [{"id": "sourcing", "number": 3, "title": "寻找货源", "status": "partial", "note": ""}],
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, payload = _post(
+            f"{self.base}/api/candidates/{candidate_id}",
+            {"costCheck": {"id": "cost_adCost", "mode": "apply", "value": 30}},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["assumptions"]["adCost"], 30.0)
+        done = next(item for item in payload["purchaseChecklist"] if item["id"] == "cost_adCost")
+        self.assertTrue(done["done"])
+
+        status, payload = _post(
+            f"{self.base}/api/candidates/{candidate_id}",
+            {"costCheck": {"id": "soft_0", "mode": "apply", "value": 3}},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["assumptions"]["otherCost"], 3.0)
+
+        status, payload = _post(
+            f"{self.base}/api/candidates/{candidate_id}",
+            {"costCheck": {"id": "soft_0", "mode": "apply", "value": 5}},
+            method="PATCH",
+        )
+        self.assertEqual(status, 200)
+        # Re-confirming replaces the earlier value instead of adding to it.
+        self.assertEqual(payload["assumptions"]["otherCost"], 5.0)
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")

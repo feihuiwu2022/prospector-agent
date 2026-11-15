@@ -30,6 +30,7 @@ from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
 from prospector.domain import (
+    COST_CHECK_TARGETS,
     EVIDENCE_DIMENSION_LABELS,
     build_landed_cost,
     build_scale_plan,
@@ -944,6 +945,58 @@ class Handler(BaseHTTPRequestHandler):
         result = STORE.update(save)
         self.send_json(200 if result else 404, result or {"error": "没有找到这个询价单。"})
 
+    def _apply_cost_check(self, candidate: dict, payload: dict, data: dict) -> None:
+        """Close a cost check, optionally writing the number into the model.
+
+        Percentages are entered as percentages; the soft items (packaging,
+        storage, returns handling, service) are summed into the other-cost
+        line so they are not lost.
+        """
+        check_id = str(payload.get("id", "")).strip()
+        if not check_id:
+            raise ValueError("成本项确认缺少 id。")
+        mode = str(payload.get("mode", "apply")).strip()
+        value = payload.get("value")
+        try:
+            number = float(value) if value not in (None, "") else None
+        except (TypeError, ValueError) as exc:
+            raise ValueError("成本项金额必须是有效数字。") from exc
+        if mode == "apply" and number is None:
+            raise ValueError("写入模型需要填写金额；确认无此项请用“确认无此项”。")
+
+        assumptions = candidate.setdefault("assumptions", {})
+        applied = candidate.setdefault("costChecksApplied", {})
+        target = COST_CHECK_TARGETS.get(check_id)
+        if target and number is not None:
+            field, _label, kind = target
+            assumptions[field] = round(number / 100, 4) if kind == "比例" else number
+            applied[check_id] = {"value": number, "field": field, "kind": kind}
+        elif number is not None:
+            # Soft items are collected into the other-cost line.
+            base = float(assumptions.get("otherCost") or 0) - sum(
+                float(item.get("value") or 0)
+                for key, item in applied.items()
+                if isinstance(item, dict) and item.get("field") == "otherCost"
+            )
+            soft_total = sum(
+                float(item.get("value") or 0)
+                for key, item in applied.items()
+                if isinstance(item, dict) and item.get("field") == "otherCost" and key != check_id
+            )
+            assumptions["otherCost"] = round(base + soft_total + number, 2)
+            applied[check_id] = {"value": number, "field": "otherCost", "kind": "每件金额"}
+        else:
+            applied[check_id] = {"value": 0, "field": "", "kind": "确认无此项"}
+
+        for item in candidate.get("purchaseChecklist", []):
+            if str(item.get("id")) == check_id:
+                item["done"] = True
+                item["status"] = "已确认"
+                if payload.get("note"):
+                    item["note"] = str(payload.get("note"))[:300]
+        candidate["updatedAt"] = utc_now()
+        advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
+
     def _apply_quote_to_candidate(self, data: dict, rfq: dict, quote: dict, body: dict) -> None:
         """Use a written quote as the purchase cost of the candidate.
 
@@ -1607,7 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self.send_json(404, {"error": "没有找到这个接口。"})
             return
-        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist", "pilot", "actualCost"}
+        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist", "pilot", "actualCost", "costCheck"}
 
         def update_candidate(data):
             candidate = find_candidate(data, match.group(1))
@@ -1624,6 +1677,11 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if key == "status" and value not in {"researching", "ready_for_test", "paused", "archived"}:
                         raise ValueError("研究状态无效。")
+                    if key == "costCheck":
+                        if not isinstance(value, dict):
+                            raise ValueError("成本项确认必须是对象。")
+                        self._apply_cost_check(candidate, value, data)
+                        continue
                     if key == "actualCost":
                         if not isinstance(value, dict):
                             raise ValueError("实际到货成本必须是对象。")

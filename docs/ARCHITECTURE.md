@@ -118,7 +118,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 - `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（`roles` 可多选：需求与内容侧 / 销售市场侧 / 货源侧）、销售市场（`sales_market`）、供给市场（`supply_market`）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录、经营画像和候选证据归类都读这张表；新增平台是改数据而不是改多处代码。目标市场（`MARKETS`：日本 / 中国 / 海外）决定销售平台清单，采购来源国决定货源平台清单。
 - `prospector/strategies.py`：策略与六阶段目录。
 - `calculate_batch_plan` 用首批数量与现金回本周期算资金占用与每日销量要求，不预测销量速度。
-- `suggest_cost_checks` 在未归因差额超过阈值时列出未录入的常见成本项，并写成采购待办。
+- `suggest_cost_checks` 在未归因差额超过阈值时列出未录入的常见成本项，并写成采购待办；`COST_CHECK_TARGETS` 定义每个待查项写入利润模型的字段（比例类按百分比换算，软性成本并入其他单件成本）。
 - `reconcile_profit` 把利润模型的单件贡献与实测单件净利对照，并按售价、广告、退货预留、采购成本四项拆分差额，未归因部分单列。
 - `build_landed_cost` 按实收数量摊薄运费、关税与保险，按破损比例计入预留，并按验货异常（短装/破损/错发减少可售数量、赔付扣减总额）重算每件到岸成本；`qc_template` 按品类给出验货清单项；`calculate_batch_plan` 优先使用真实到岸成本而不是估算采购价。
 - `calibrate_assumptions` 把小测实测值（每单广告成本、退款率、净利率）与已填假设做对照，给出建议但不自动改写假设。
