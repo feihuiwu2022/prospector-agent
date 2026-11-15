@@ -890,10 +890,45 @@ class Handler(BaseHTTPRequestHandler):
             if rfq.get("product") and rfq["product"] not in supplier["products"]:
                 supplier["products"].append(rfq["product"])
             supplier["updatedAt"] = utc_now()
+            if body.get("applyToCandidate") and rfq.get("candidateId"):
+                self._apply_quote_to_candidate(data, rfq, quote, body)
             return rfq
 
         result = STORE.update(save)
         self.send_json(200 if result else 404, result or {"error": "没有找到这个询价单。"})
+
+    def _apply_quote_to_candidate(self, data: dict, rfq: dict, quote: dict, body: dict) -> None:
+        """Use a written quote as the purchase cost of the candidate.
+
+        The quote is a human recorded answer, so it also becomes evidence:
+        the profit number can be traced back to who said what, and when.
+        """
+        candidate = find_candidate(data, rfq.get("candidateId", ""))
+        if candidate is None:
+            return
+        assumptions = candidate.setdefault("assumptions", {})
+        if quote.get("unitPrice") not in (None, ""):
+            assumptions["purchasePrice"] = quote["unitPrice"]
+            assumptions["purchaseCurrency"] = quote.get("currency") or assumptions.get("purchaseCurrency", "")
+        source_note = (
+            f"人工录入的书面报价：{quote.get('platform', '')} · {quote.get('seller', '')}；"
+            f"单价 {quote.get('unitPrice') if quote.get('unitPrice') is not None else '未填'} {quote.get('currency', '')}；"
+            f"MOQ {quote.get('moq') if quote.get('moq') is not None else '未填'}；"
+            f"交期 {quote.get('leadTimeDays') if quote.get('leadTimeDays') is not None else '未填'} 天。"
+            + (f" 备注：{quote.get('note')}" if quote.get("note") else "")
+        )
+        candidate.setdefault("evidence", []).append({
+            "id": str(uuid4()),
+            "dimension": "sourcing",
+            "title": f"供应商书面报价 · {quote.get('platform', '')} · {quote.get('seller', '')}",
+            "sourceType": "人工录入的询价回复",
+            "url": str(body.get("url", "")).strip()[:2000] or f"rfq://{rfq.get('id')}",
+            "observedAt": (quote.get("recordedAt") or utc_now())[:10],
+            "note": source_note,
+            "createdAt": utc_now(),
+        })
+        candidate["updatedAt"] = utc_now()
+        advance_candidate_workflow(candidate, (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds"))
 
     def build_metrics(self, data: dict) -> dict:
         """A retrospective of the local research record.

@@ -597,13 +597,35 @@ function renderRfqPanel(candidate) {
         <td>${quote ? `<span class="status-pill done">已报价</span>` : `<span class="status-pill wait">${esc(target.status || "待报价")}</span>`}</td>
         <td>${quote ? `${quote.unitPrice == null ? "—" : Number(quote.unitPrice).toLocaleString("zh-CN")} ${esc(quote.currency || "")}<small>MOQ ${quote.moq ?? "—"} · 交期 ${quote.leadTimeDays ?? "—"} 天</small>` : "—"}</td>
         <td>${quote ? esc(quote.note || "") : "—"}</td>
-        <td><button class="button-quiet" data-action="record-quote" data-rfq="${esc(rfq.id)}" data-platform="${esc(target.platform)}" data-seller="${esc(target.seller)}">${quote ? "修改报价" : "录入报价"}</button></td>
+        <td><button class="button-quiet" data-action="record-quote" data-rfq="${esc(rfq.id)}" data-platform="${esc(target.platform)}" data-seller="${esc(target.seller)}">${quote ? "修改报价" : "录入报价"}</button>${quote && quote.unitPrice != null ? `<button class="button-quiet" data-action="apply-quote" data-rfq="${esc(rfq.id)}" data-platform="${esc(target.platform)}" data-seller="${esc(target.seller)}">用作采购价</button>` : ""}</td>
       </tr>`;
     }).join("");
     const questions = (rfq.questions || []).map((item) => `<li>${esc(item)}</li>`).join("");
-    return `<div class="report-list"><b>${esc(rfq.title)} · ${esc(rfq.status || "")}</b><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>目标店铺</th><th>公开参考价</th><th>状态</th><th>书面报价</th><th>备注</th><th></th></tr></thead><tbody>${targets}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>需要卖家书面回答：${questions ? "" : "无"}</span></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${questions}</ul></div>`;
+    return `<div class="report-list"><b>${esc(rfq.title)} · ${esc(rfq.status || "")}</b><button class="button-quiet" data-action="export-rfq-batch" data-rfq="${esc(rfq.id)}">导出全部店铺</button><div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>目标店铺</th><th>公开参考价</th><th>状态</th><th>书面报价</th><th>备注</th><th></th></tr></thead><tbody>${targets}</tbody></table></div><div class="bottom-note"><span>ⓘ</span><span>需要卖家书面回答：${questions ? "" : "无"}</span></div><ul style="color:#9aa39b;font-size:9px;line-height:1.7">${questions}</ul></div>`;
   }).join("");
   return `<section class="panel"><div class="panel-head"><h3>询价单与报价回收</h3><small>发给多家店铺，再把书面答复收回</small>${createButton}</div>${blocks}</section>`;
+}
+
+function rfqBatchMarkdown(rfq) {
+  const lines = [`# 询价单 · ${rfq.title || ""}`, ""];
+  lines.push(`- 目标配置：${rfq.spec || "—"}`);
+  lines.push(`- 目标市场：${rfq.market || "—"}`);
+  lines.push("");
+  lines.push("## 需要书面回答的问题");
+  (rfq.questions || []).forEach((question, index) => lines.push(`${index + 1}. ${question}`));
+  lines.push("");
+  for (const target of rfq.targets || []) {
+    lines.push(`## ${target.platform} · ${target.seller}`);
+    lines.push(`- 联系页面：${target.url || "—"}`);
+    lines.push(`- 公开页面可见参考价（仅参考）：${target.referencePrice == null ? "—" : `${Number(target.referencePrice).toLocaleString("zh-CN")} ${target.referenceCurrency || ""}`}`);
+    lines.push("");
+    lines.push("请书面回复以上问题（单价 / 起订量与阶梯价 / 交期 / 发票 / 样品 / 发货地）：");
+    lines.push("");
+    lines.push("（答复栏）");
+    lines.push("");
+  }
+  lines.push("> 本询价单由公开页面线索整理，仅用于询价沟通，不构成下单或付款指令。");
+  return lines.join("\n");
 }
 
 function renderScalePlan(candidate) {
@@ -1146,10 +1168,20 @@ function renderSupplierArchive(suppliers) {
   if (!suppliers.length) {
     return `<section class="panel"><div class="panel-head"><h3>货源档案</h3><small>标记过的店铺与跟进状态</small></div><div class="table-empty" style="padding:22px"><h3>还没有标记货源</h3><p>在采购比价表或货源线索库里点“标记货源”，就会在这里建立一份店铺档案。</p></div></section>`;
   }
+  const completeness = (item) => {
+    const history = item.quoteHistory || [];
+    if (!history.length) return "—";
+    const last = history[history.length - 1];
+    const fields = ["unitPrice", "moq", "leadTimeDays", "invoice", "note"];
+    const filled = fields.filter((key) => last[key] !== null && last[key] !== undefined && last[key] !== "").length;
+    return `${Math.round((filled / fields.length) * 100)}%`;
+  };
   const rows = suppliers.map((item) => `<tr>
     <td><b>${esc(item.platform || "")}</b><small>${esc(item.seller || "")}</small></td>
     <td>${esc((item.products || []).join("、") || "—")}</td>
     <td>${item.lastPrice == null ? "—" : `${Number(item.lastPrice).toLocaleString("zh-CN")} ${esc(item.lastCurrency || "")}`}<small>${esc(item.lastObservedAt || "")}</small></td>
+    <td>${(item.quoteHistory || []).length} 条报价</td>
+    <td>${completeness(item)}</td>
     <td><select data-supplier-status="${esc(item.id)}">${["待联系", "已联系", "已报价", "已排除"].map((status) => `<option ${item.status === status ? "selected" : ""}>${status}</option>`).join("")}</select></td>
     <td><input data-supplier-note="${esc(item.id)}" value="${esc(item.note || "")}" placeholder="备注：MOQ、报价、时效…" /></td>
     <td>${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">页面 ↗</a>` : "—"}</td>
@@ -1305,6 +1337,27 @@ document.addEventListener("click", async (event) => {
       toast(`询价单已创建，含 ${created.targets.length} 家店铺。`);
       return;
     }
+    if (action === "apply-quote") {
+      const body = {
+        platform: button.dataset.platform,
+        seller: button.dataset.seller,
+        applyToCandidate: true,
+      };
+      const rfq = (state.rfqs || []).find((item) => item.id === button.dataset.rfq);
+      const quote = (rfq?.quotes || []).find((item) => item.platform === button.dataset.platform && item.seller === button.dataset.seller);
+      if (!quote) { toast("这条报价还没有记录。", true); return; }
+      body.unitPrice = quote.unitPrice;
+      body.moq = quote.moq;
+      body.leadTimeDays = quote.leadTimeDays;
+      body.currency = quote.currency;
+      body.note = quote.note;
+      await api(`/api/rfqs/${encodeURIComponent(button.dataset.rfq)}/quotes`, { method: "POST", body: JSON.stringify(body) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("已把书面报价回填为采购价，并记入来源证据。");
+      return;
+    }
     if (action === "record-quote") {
       const rfqId = button.dataset.rfq;
       const platform = button.dataset.platform;
@@ -1332,6 +1385,18 @@ document.addEventListener("click", async (event) => {
       state.view = "detail";
       render();
       toast("报价已记录，并同步到货源档案。");
+      return;
+    }
+    if (action === "export-rfq-batch") {
+      const rfq = (state.rfqs || []).find((item) => item.id === button.dataset.rfq);
+      if (!rfq) { toast("没有找到这个询价单。", true); return; }
+      const blob = new Blob([rfqBatchMarkdown(rfq)], { type: "text/markdown;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${(rfq.title || "rfq").replace(/[\\/:*?"<>|]/g, "-")}-询价单.md`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast("询价单已导出（每家店铺一节，可分开发送）。");
       return;
     }
     if (action === "download-rfq") {

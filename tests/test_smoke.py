@@ -331,6 +331,66 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("error", payload)
 
+    def test_written_quote_can_become_the_purchase_cost(self) -> None:
+        import server  # noqa: PLC0415 - the server module is imported in setUpClass
+
+        candidate_id = "quote-candidate-1"
+
+        def insert(data):
+            data.setdefault("candidates", []).append({
+                "id": candidate_id,
+                "name": "OPPO K13s 12G+256G",
+                "category": "其他",
+                "hypothesis": "报价回填",
+                "market": "中国",
+                "platform": "京东",
+                "sourcingCountry": "中国",
+                "fulfillment": "待确认",
+                "mode": "active_research",
+                "status": "researching",
+                "assumptions": {"sellingPrice": 2099, "sellingCurrency": "CNY", "purchasePrice": 1899, "purchaseCurrency": "CNY"},
+                "evidence": [],
+                "scores": {},
+                "tasks": [],
+                "createdAt": "2026-11-15T00:00:00+00:00",
+                "updatedAt": "2026-11-15T00:00:00+00:00",
+            })
+
+        server.STORE.update(insert)
+        status, rfq = _post(
+            f"{self.base}/api/rfqs",
+            {
+                "candidateId": candidate_id,
+                "product": "OPPO K13s",
+                "spec": "12G+256G",
+                "market": "中国",
+                "currency": "CNY",
+                "targets": [{"platform": "淘宝 / 天猫", "seller": "shop-a.taobao.com"}],
+            },
+        )
+        self.assertEqual(status, 201)
+
+        status, _ = _post(
+            f"{self.base}/api/rfqs/{rfq['id']}/quotes",
+            {
+                "platform": "淘宝 / 天猫",
+                "seller": "shop-a.taobao.com",
+                "unitPrice": 1820,
+                "moq": 50,
+                "leadTimeDays": 7,
+                "currency": "CNY",
+                "applyToCandidate": True,
+            },
+        )
+        self.assertEqual(status, 200)
+        candidate = json.loads(_get(f"{self.base}/api/candidates/{candidate_id}")[2])
+        self.assertEqual(candidate["assumptions"]["purchasePrice"], 1820)
+        self.assertEqual(candidate["assumptions"]["purchaseCurrency"], "CNY")
+        sourcing = [item for item in candidate["evidence"] if item["dimension"] == "sourcing"]
+        self.assertTrue(sourcing)
+        self.assertIn("书面报价", sourcing[-1]["note"])
+        self.assertIn("1820", sourcing[-1]["note"])
+
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):
             status, content_type, body = _get(f"{self.base}{path}")
