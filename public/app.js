@@ -38,7 +38,11 @@ function sourcingPlatforms(market) {
 
 function marketOptions(selected) {
   const markets = state.markets && state.markets.length ? state.markets : ["日本", "中国", "海外"];
-  return markets.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("");
+  const groups = state.marketGroups || [];
+  if (!groups.length) {
+    return markets.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("");
+  }
+  return groups.map((group) => `<optgroup label="${esc(group.group)}">${group.markets.map((market) => `<option value="${esc(market)}" ${market === selected ? "selected" : ""}>${esc(market)}</option>`).join("")}</optgroup>`).join("");
 }
 
 function sourceMarketOptions(selected) {
@@ -235,6 +239,13 @@ const chatModes = {
     placeholder: "例如：日本站便携宠物饮水器，分析 Amazon 与乐天的竞品",
     suggestions: ["日本站 便携宠物饮水器", "Amazon JP 桌面收纳类目", "乐天市场 户外炊具", "对比两个具体商品的定价与差评"],
   },
+  price_gap: {
+    title: "同品比价",
+    short: "同配置差价",
+    description: "给定一个商品型号，Agent 逐个平台找公开报价，只对同配置机型比较差价。",
+    placeholder: "例如：OPPO K13s 12GB+256GB",
+    suggestions: ["OPPO K13s", "小米 14 Ultra 16GB+512GB", "iPhone 16 128GB", "索尼 WH-1000XM5"],
+  },
 };
 
 function activeConversation() {
@@ -257,11 +268,42 @@ function renderCompetitorReport(run) {
   return `<section class="chat-result-card"><div class="chat-result-head"><b>竞品扫描结果</b><span>${esc(report.scope || "")}</span></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${rows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>竞品/平台</th><th>渠道</th><th>定位</th><th>价格线索</th><th>差异/反馈线索</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="inline-alert">目前没有足够的带来源竞品行。可以补充品牌、类目词或目标平台再运行。</div>`}${themes ? `<div class="report-list"><b>共性趋势</b><ul>${themes}</ul></div>` : ""}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条搜索线索 · ${esc(run.model || "MiniMax Agent")} · “国内货源对照”行的价格来自国内电商公开页面，不等于源头成本</small></section>`;
 }
 
+function renderPriceGapReport(run) {
+  const report = run.report || {};
+  const groups = report.groups || [];
+  const currency = report.currency || "CNY";
+  const money = (value) => (value == null ? "—" : `${Number(value).toLocaleString("zh-CN")} ${currency}`);
+  const groupBlocks = groups.map((group) => {
+    const rows = (group.rows || []).map((row) => `<tr>
+      <td><b>${esc(row.platform)}</b>${row.secondHand ? `<small>二手/个人定价</small>` : ""}</td>
+      <td>${esc(row.configKey || "配置未识别")}${row.color ? ` · ${esc(row.color)}` : ""}</td>
+      <td>${money(row.priceLow)}${row.priceHigh && row.priceHigh !== row.priceLow ? `<small>~ ${money(row.priceHigh)}</small>` : ""}</td>
+      <td>${row.gapToLowest ? `${money(row.gapToLowest)}（${(Number(row.gapPct || 0) * 100).toFixed(1)}%）` : "—"}</td>
+      <td>${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">来源 ↗</a>` : "—"}</td>
+    </tr>`).join("");
+    const head = group.comparable
+      ? `<b>${esc(group.config || "未识别配置")}</b> · 同配置毛差价 ${money(group.grossGap)}（${(Number(group.grossGapPct || 0) * 100).toFixed(1)}%）· 最低 ${esc(group.lowestPlatform)} / 最高 ${esc(group.highestPlatform)}${group.arbDirection ? ` · 套利方向 ${esc(group.arbDirection)}` : ""}`
+      : `<b>${esc(group.config || "未识别配置")}</b> · ${esc((group.reasons || []).join("；") || "不可对比")}`;
+    const caveats = (group.caveats || []).length ? `<ul>${group.caveats.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : "";
+    return `<div class="report-list"><b>${head}</b>${caveats}<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>配置</th><th>可见报价</th><th>与同配置最低价差价</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }).join("");
+  const summaryRows = (report.platformSummary || []).map((item) => `<tr>
+    <td><b>${esc(item.platform)}</b></td>
+    <td>${item.status === "found" ? `${money(item.visiblePriceLow)}${item.visiblePriceHigh !== item.visiblePriceLow ? ` ~ ${money(item.visiblePriceHigh)}` : ""}` : "—"}</td>
+    <td>${esc(item.config || "—")}</td>
+    <td>${esc(item.note || "")}</td>
+  </tr>`).join("");
+  const gaps = (report.gaps || []).map((item) => `<li>${esc(item)}</li>`).join("");
+  const crossBorder = report.crossBorder ? `<div class="inline-alert">${esc(report.crossBorder.note)}</div>` : "";
+  return `<section class="chat-result-card"><div class="chat-result-head"><b>同品跨平台比价</b><span>${esc(report.scope || "")}</span></div><p class="chat-result-summary">${esc(report.summary || run.summary || "")}</p>${crossBorder}${summaryRows ? `<div class="competitor-table-wrap"><table class="competitor-table"><thead><tr><th>平台</th><th>可见报价区间</th><th>配置</th><th>说明</th></tr></thead><tbody>${summaryRows}</tbody></table></div>` : ""}${groupBlocks || `<div class="inline-alert">没有找到带型号与价格的公开页面。可以换一个更通用的商品名再试。</div>`}${gaps ? `<div class="report-list"><b>还需核实</b><ul>${gaps}</ul></div>` : ""}<small class="chat-result-foot">${Number(run.sourceCount || 0)} 条可见报价 · 价格来自公开搜索摘要，未打开商品页核实 · 差价未扣佣金、广告、履约与退货，不是利润</small></section>`;
+}
+
 function renderChatRun(run) {
   if (!run) return "";
   if (run.status === "running") return `<section class="chat-run-progress"><div class="run-progress-label">${Number(run.progress || 0)}%</div><div class="run-progress"><i style="width:${Math.max(3, Math.min(100, Number(run.progress || 0)))}%"></i></div><b>${esc(run.message || "Agent 研究中…")}</b><small>${esc(run.stage || "planning")} · 研究完成后在这里展示来源和结果</small></section>`;
   if (run.status === "failed") return `<div class="chat-run-error">${esc(run.message || "Agent 运行失败。")}</div>`;
   if (run.mode === "competitor_analysis") return renderCompetitorReport(run);
+  if (run.mode === "price_gap") return renderPriceGapReport(run);
   const candidates = (run.candidateIds || []).map((id) => state.candidates.find((item) => item.id === id)).filter(Boolean);
   return `<section class="chat-run-result"><div class="chat-result-head"><b>${run.status === "no_candidates" ? "本次未形成候选" : "待你审核的候选"}</b><span>${Number(run.sourceCount || 0)} 条来源线索 · ${esc(run.model || "MiniMax Agent")}</span></div><p>${esc(run.summary || run.message || "")}</p><div class="agent-candidate-grid">${candidates.map(renderAgentCandidate).join("") || `<div class="agent-empty"><h3>暂无可审商品</h3><p>Agent 没有找到来源足够的候选。你可以换策略或补充范围再试。</p></div>`}</div></section>`;
 }
@@ -298,7 +340,7 @@ function renderHome() {
         <div class="chat-composer-context"><label>目标市场<select name="market" data-change="chat-market">${marketOptions(market)}</select></label><label>优先平台<select name="platform">${platformOptions}</select></label>${state.chatMode === "automatic_selection" ? `<span class="selected-strategy-label">${esc(strategies.find((item) => item.id === state.chatStrategyId)?.title || "选择策略")}</span>` : ""}</div>
         <div class="sugg-chips">${(mode.suggestions || []).map((text) => `<button type="button" data-action="use-suggestion" data-text="${esc(text)}">${esc(text)}</button>`).join("")}</div>
         <textarea name="message" rows="2" placeholder="${esc(mode.placeholder)}" ${state.chatMode === "automatic_selection" ? "" : "required"}></textarea>
-        <div class="chat-composer-bottom"><small>${state.chatMode === "automatic_selection" ? "可以留空；策略会决定 Agent 的发现方向。" : "Agent 会根据你的描述自动规划搜索，不需要你先查好竞品。"} 搜索摘要需要点开来源核实。</small><button class="button-primary" type="submit" ${!state.webSearch?.configured ? "disabled" : ""}>${state.chatMode === "competitor_analysis" ? "开始竞品分析" : "发送给 Agent"} <span>↑</span></button></div>
+        <div class="chat-composer-bottom"><small>${state.chatMode === "automatic_selection" ? "可以留空；策略会决定 Agent 的发现方向。" : state.chatMode === "price_gap" ? "填一个型号，Agent 逐个平台比同配置差价；差价不等于利润。" : "Agent 会根据你的描述自动规划搜索，不需要你先查好竞品。"} 搜索摘要需要点开来源核实。</small><button class="button-primary" type="submit" ${!state.webSearch?.configured ? "disabled" : ""}>${state.chatMode === "competitor_analysis" ? "开始竞品分析" : state.chatMode === "price_gap" ? "开始比价" : "发送给 Agent"} <span>↑</span></button></div>
       </form>
     </section>
     <div class="bottom-note"><span>ⓘ</span><span><strong>数据边界：</strong>公开网页搜索是发现线索，不等于实时趋势序列、平台销量、可购价或正式 MOQ 报价。Agent 不会自动下单。</span></div>
@@ -312,6 +354,7 @@ function renderStrategyLayer(strategies, activeStrategy) {
     const scope = {
       manual_selection: { title: "手动选品", lines: ["你给出：商品名称 / 链接，或人群、类目、市场、价格带等范围。", "Agent 负责：在范围内挑出具体商品并做完整研究，或对给定商品给出评估。"] },
       competitor_analysis: { title: "手动竞品分析", lines: ["你给出：类目、目标市场、平台，或具体商品 / 品牌。", "Agent 负责：盘点竞品集合、价格带、卖点与差评主题，输出带来源的对照。"] },
+      price_gap: { title: "同品比价", lines: ["你给出：商品名称或型号（如 OPPO K13s）。", "Agent 负责：逐个平台找公开报价，只对同配置机型比较差价，并保留来源。"] },
     }[state.chatMode];
     return `<section class="layer"><div class="layer-head"><span class="layer-no">1</span><h2>研究范围</h2><p>${esc(scope.title)}：人给范围，Agent 出商品。</p></div>
       <div class="source-boundary-grid">${scope.lines.map((line) => `<article><p>${esc(line)}</p></article>`).join("")}</div></section>`;
@@ -337,7 +380,7 @@ function flowRailState() {
     || (state.discoveryRuns || [])[0];
   const runCandidates = run?.candidateIds?.map((id) => state.candidates.find((item) => item.id === id)).filter(Boolean) || [];
   const stageStates = runCandidates[0]?.workflowStages || [];
-  const runningIndex = { planning: 0, demand: 0, candidate_generation: 1, market: 1, sourcing: 2, validation: 2, validation_analysis: 3, human_review: 3 }[run?.status === "running" ? run.stage : ""];
+  const runningIndex = { planning: 0, demand: 0, candidate_generation: 1, market: 1, price_gap_search: 1, sourcing: 2, price_gap_compare: 2, validation: 2, validation_analysis: 3, human_review: 3 }[run?.status === "running" ? run.stage : ""];
   return stages.map((stage, index) => {
     const recorded = stageStates.find((item) => item.id === stage.id);
     let status = recorded?.status || "pending";
@@ -505,15 +548,33 @@ const profitFields = [
   ["otherCostJpy", "其他单件成本", "JPY / 件", ""],
 ];
 
+const sameCurrencyFields = [
+  ["sellingPrice", "销售端报价", "元 / 件", ""],
+  ["purchasePrice", "采购端报价", "元 / 件", ""],
+  ["referralRate", "平台佣金率", "%", "percent"],
+  ["adCost", "广告成本预估", "元 / 件", ""],
+  ["fulfillmentCost", "履约与运费", "元 / 件", ""],
+  ["returnReserveRate", "退货/损耗预留", "%", "percent"],
+  ["otherCost", "其他单件成本", "元 / 件", ""],
+];
+
 function renderProfit(candidate) {
   const values = candidate.assumptions || {};
   const result = candidate.profit || { complete: false };
+  const currency = values.currency || (candidate.market === "中国" ? "CNY" : "JPY");
+  const fieldMarkup = (list, prefix) => list.map(([key, label, unit, type]) => `<div class="field"><label for="${prefix}-${key}">${esc(label)} <span style="font-weight:400;color:#9ca59e">(${esc(unit)})</span></label><input id="${prefix}-${key}" name="${key}" type="number" min="0" step="${type === "percent" ? "0.1" : "0.01"}" value="${values[key] == null ? "" : type === "percent" ? Number(values[key]) * 100 : esc(values[key])}" placeholder="${type === "percent" ? "输入百分比" : "输入假设值"}" /></div>`).join("");
   return `<div class="detail-grid"><div><section class="panel"><div class="panel-head"><h3>单件利润假设</h3><small>所有金额和费率需自行核实</small></div><form id="profit-form" class="form-grid">
-    ${profitFields.map(([key, label, unit, type]) => `<div class="field"><label for="pf-${key}">${esc(label)} <span style="font-weight:400;color:#9ca59e">(${esc(unit)})</span></label><input id="pf-${key}" name="${key}" type="number" min="0" step="${type === "percent" ? "0.1" : "0.01"}" value="${values[key] == null ? "" : type === "percent" ? Number(values[key]) * 100 : esc(values[key])}" placeholder="${type === "percent" ? "输入百分比" : "输入假设值"}" /></div>`).join("")}
-    <p class="form-help">佣金和退货预留按百分比录入。汇率和费用不是实时数据；请记录你采用的报价或费率来源。</p>
+    <p class="form-help">同市场差价场景（买卖同币种）：先填这一组，跨境到日本再填下面那组。填了销售端报价后按同币种模型计算。</p>
+    <div class="field"><label for="sc-currency">结算币种</label><select id="sc-currency" name="currency"><option value="CNY" ${currency === "CNY" ? "selected" : ""}>CNY 元</option><option value="JPY" ${currency === "JPY" ? "selected" : ""}>JPY 日元</option></select></div>
+    ${fieldMarkup(sameCurrencyFields, "sc")}
+    <p class="form-help">佣金和退货预留按百分比录入；缺任何一项都只显示“待核验”，不自动估算。</p>
+    <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存并计算</button></div></div>
+  </form></section><section class="panel"><div class="panel-head"><h3>跨境利润假设（日元结算）</h3><small>中国采购 → 日本销售</small></div><form id="profit-form-jpy" class="form-grid">
+    ${fieldMarkup(profitFields, "pf")}
+    <p class="form-help">汇率和费用不是实时数据；请记录你采用的报价或费率来源。</p>
     <div class="field full"><div class="form-actions"><button type="submit" class="button-primary">保存并计算</button></div></div>
   </form></section></div><aside>
-    <section class="panel"><div class="panel-head"><h3>利润情景</h3><small>JPY / 单件</small></div>${result.complete ? `<div class="profit-result"><div class="profit-metric"><span>贡献利润</span><b class="${result.contributionProfit < 0 ? "negative" : ""}">¥${fmtYen(result.contributionProfit)}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${result.contributionMargin < 0 ? "negative" : ""}">${(result.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>¥${fmtYen(result.breakEvenAdCost)}</b></div></div><div class="profit-costs">${Object.entries(result.costs).map(([key, value]) => `<div class="cost-row"><span>${esc(key)}</span><b>¥${fmtYen(value)}</b></div>`).join("")}</div>` : `<div class="inline-alert">补齐必要输入后展示计算结果；关税和其他成本请核实或明确填入。</div>`}</section>
+    <section class="panel"><div class="panel-head"><h3>利润情景</h3><small>${result.currency || "JPY"} / 单件</small></div>${result.complete ? `<div class="profit-result"><div class="profit-metric"><span>贡献利润</span><b class="${result.contributionProfit < 0 ? "negative" : ""}">${result.currency === "CNY" ? `¥${Number(result.contributionProfit).toLocaleString("zh-CN")}` : `¥${fmtYen(result.contributionProfit)}`}</b></div><div class="profit-metric"><span>贡献利润率</span><b class="${result.contributionMargin < 0 ? "negative" : ""}">${(result.contributionMargin * 100).toFixed(1)}%</b></div><div class="profit-metric"><span>盈亏平衡广告成本</span><b>${result.currency === "CNY" ? `¥${Number(result.breakEvenAdCost).toLocaleString("zh-CN")}` : `¥${fmtYen(result.breakEvenAdCost)}`}</b></div></div><div class="profit-costs">${Object.entries(result.costs).map(([key, value]) => `<div class="cost-row"><span>${esc(key)}</span><b>${result.currency === "CNY" ? `¥${Number(value).toLocaleString("zh-CN")}` : `¥${fmtYen(value)}`}</b></div>`).join("")}</div>` : `<div class="inline-alert">补齐必要输入后展示计算结果；${result.missingFields?.length ? `当前缺：${result.missingFields.join("、")}。` : "关税和其他成本请核实或明确填入。"}</div>`}</section>
     <section class="panel"><div class="panel-head"><h3>计算公式</h3></div><p style="font-size:8px;line-height:1.7;color:#7f8981;margin:0">售价 − 采购成本（按手动汇率换算）− 头程 − 关税及进口税费 − FBA − 平台佣金 − 广告 − 退货预留 − 其他成本。</p><p style="font-size:8px;line-height:1.7;color:#9aa39b;margin:8px 0 0">这是单件贡献利润情景，未录入的固定费用、汇兑波动和税务处理仍需人工复核。</p></section>
   </aside></div>`;
 }
@@ -911,11 +972,16 @@ document.addEventListener("submit", async (event) => {
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}/evidence`, { method: "POST", body: JSON.stringify(payload) });
       await refresh(); state.view = "detail"; state.tab = "evidence"; render(); toast("来源已保存；其真实性仍需人工复核。"); return;
     }
-    if (form.id === "profit-form") {
+    if (form.id === "profit-form" || form.id === "profit-form-jpy") {
       const assumptions = {};
-      for (const [key] of profitFields) {
+      const fields = form.id === "profit-form" ? sameCurrencyFields : profitFields;
+      for (const [key] of fields) {
         const raw = String(data.get(key) || "").trim();
         if (raw !== "") assumptions[key] = key === "referralRate" || key === "returnReserveRate" ? Number(raw) / 100 : Number(raw);
+      }
+      if (form.id === "profit-form") {
+        const currency = String(data.get("currency") || "").trim().toUpperCase();
+        if (currency) assumptions.currency = currency;
       }
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ assumptions }) });
       await refresh(); state.view = "detail"; state.tab = "profit"; render(); toast("利润假设已更新。"); return;

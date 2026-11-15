@@ -99,7 +99,7 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 
 - `GET /api/bootstrap`：候选、会话/运行记录、策略、六阶段、连接器和服务能力状态。
 - `POST /api/agent/discovery`：异步启动自动选品。
-- `POST /api/agent/chat`：按三种模式启动异步会话任务；手动竞品分析输出竞品报告，其他两种模式输出候选。
+- `POST /api/agent/chat`：按四种模式启动异步会话任务；手动竞品分析输出竞品报告，同品比价输出同配置差价表与差价候选，其他两种模式输出候选。
 - `POST /api/candidates/{id}/review`：记录继续研究、暂缓或淘汰的人工审核决定。
 - 会话与运行结果暂存在本地 JSON store；`GET /api/bootstrap` 返回会话、消息和历史运行。
 - `GET /api/agent/runs/{id}`：查询阶段进度和结果。
@@ -111,7 +111,9 @@ Agent Run 和 Candidate 使用独立状态。Run 状态包括 `running`、`needs
 
 - `prospector/platforms.py`：平台登记表。每个平台只描述一次——角色（`roles` 可多选：需求与内容侧 / 销售市场侧 / 货源侧）、销售市场（`sales_market`）、供给市场（`supply_market`）、地区、访问级别、授权通道、搜索关键词与站点归属。查询计划、连接器目录、经营画像和候选证据归类都读这张表；新增平台是改数据而不是改多处代码。目标市场（`MARKETS`：日本 / 中国 / 海外）决定销售平台清单，采购来源国决定货源平台清单。
 - `prospector/strategies.py`：策略与六阶段目录。
+- 利润模型有两种：`calculate_profit`（跨境日元结算，含汇率、头程、关税、FBA）与 `calculate_same_currency_profit`（同币种场景，用于国内平台间差价）。两者都缺输入即返回“待核验”，不用默认值补齐。
 - `prospector/agent_discovery.py`：查询计划、候选生成、市场/货源复查、证据绑定。
+- `prospector/agent_pricegap.py`：同品跨平台比价。逐个平台构造搜索式，从公开摘要里解析型号、内存/存储与价格，按“同配置”分组，只在同分组内计算差价；二手平台只作背景。可比分组会生成候选，候选只预填两端报价，佣金、广告、履约与退货由人填写后用单币种利润模型计算。
 - `prospector/llm/web_search.py`：MiniMax Coding Plan 官方 Web Search MCP stdio 客户端。
 
 搜索结果按 URL 实际域名判定平台归属（`platform_for_url`），因为该后端把 `site:` 当提示而非过滤；证据的 `sourceType` 因此永远写实际来源平台，搜索式原目标写在备注里。证据维度按平台实际角色与当前研究范围归类（`platform_dimension`）：同一个平台在不同目标市场里角色不同——淘宝在目标市场为中国时是竞品，在“中国采购 → 日本销售”的范围里是国内货源对照。搜索式阶段只作为无法匹配平台时的兜底。

@@ -1,0 +1,132 @@
+"""Unit tests for the same-spec price gap scanner.
+
+No network and no model calls: the search backend is replaced by a fixture so
+the parsing, grouping and gap rules can be checked deterministically.
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import prospector.agent_pricegap as pricegap  # noqa: E402
+
+
+FIXTURE = [
+    {
+        "ref": "S1",
+        "platformId": "taobao",
+        "title": "OPPO K13s 12GB+256GB 官方旗舰店",
+        "url": "https://item.taobao.com/item.htm?id=1",
+        "snippet": "限时到手价 ¥1899 元，12GB+256GB 星辰黑 全国联保",
+    },
+    {
+        "ref": "S2",
+        "platformId": "jd",
+        "title": "OPPO K13s 12+256 京东自营",
+        "url": "https://item.jd.com/2.html",
+        "snippet": "京东价 2099.00元，12GB+256GB 官方标配",
+    },
+    {
+        "ref": "S3",
+        "platformId": "pdd",
+        "title": "OPPO K13s 手机 8+128",
+        "url": "https://mobile.yangkeduo.com/3.html",
+        "snippet": "拼单价 ￥1299 8GB+128GB",
+    },
+    {
+        "ref": "S4",
+        "platformId": "xianyu",
+        "title": "K13s 12GB+256GB 二手",
+        "url": "https://www.goofish.com/5",
+        "snippet": "￥1650 12GB+256GB 个人闲置",
+    },
+    {
+        "ref": "S5",
+        "platformId": "taobao",
+        "title": "OPPO K13s 评测文章",
+        "url": "https://www.zhihu.com/4",
+        "snippet": "售价约 1999 元，但摘要没有写容量",
+    },
+]
+
+
+class PriceGapScanTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original = pricegap.search_many
+        pricegap.search_many = lambda plan: list(FIXTURE)
+
+    def tearDown(self) -> None:
+        pricegap.search_many = self.original
+
+    def test_only_same_configuration_rows_are_compared(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        groups = {group["config"]: group for group in result["groups"]}
+        self.assertIn("12G+256G", groups)
+        self.assertTrue(groups["12G+256G"]["comparable"])
+        # A different memory/storage combination never joins that group.
+        self.assertIn("8G+128G", groups)
+        self.assertFalse(groups["8G+128G"]["comparable"])
+        self.assertFalse(groups["未识别配置"]["comparable"])
+
+    def test_gap_is_computed_against_the_lowest_same_spec_price(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        group = next(item for item in result["groups"] if item["config"] == "12G+256G")
+        self.assertEqual(group["lowestPlatform"], "淘宝 / 天猫")
+        self.assertEqual(group["highestPlatform"], "京东")
+        self.assertEqual(group["grossGap"], 200.0)
+        jd = next(row for row in group["rows"] if row["platformId"] == "jd")
+        self.assertEqual(jd["gapToLowest"], 200.0)
+
+    def test_second_hand_prices_are_background_only(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        group = next(item for item in result["groups"] if item["config"] == "12G+256G")
+        xianyu = next(row for row in group["rows"] if row["platformId"] == "xianyu")
+        self.assertTrue(xianyu["secondHand"])
+        self.assertEqual(xianyu["gapToLowest"], 0.0)
+        self.assertNotEqual(group["lowestPlatform"], "闲鱼（个人二手）")
+
+    def test_opportunity_uses_cheapest_and_dearest_first_hand_platforms(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        opportunities = result["opportunities"]
+        self.assertEqual(len(opportunities), 1)
+        item = opportunities[0]
+        self.assertEqual(item["sourcePlatform"], "淘宝 / 天猫")
+        self.assertEqual(item["targetPlatform"], "京东")
+        self.assertEqual(item["grossGap"], 200.0)
+
+    def test_rows_without_the_model_are_dropped(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        titles = [row["title"] for group in result["groups"] for row in group["rows"]]
+        self.assertTrue(all("OPPO" in title or "K13s" in title for title in titles))
+
+    def test_cross_border_market_reports_without_computing_fx(self) -> None:
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "日本")
+        self.assertIsNotNone(result["crossBorder"])
+        self.assertIn("汇率", result["crossBorder"]["note"])
+
+    def test_candidates_are_created_with_the_observed_prices_only(self) -> None:
+        from prospector.domain import calculate_profit
+
+        result = pricegap.run_price_gap_scan("OPPO K13s", "中国", "中国")
+        candidates = pricegap.build_price_gap_candidates(
+            "OPPO K13s", result, {"market": "中国", "sourcingCountry": "中国"}
+        )
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate["assumptions"]["sellingPrice"], 2099.0)
+        self.assertEqual(candidate["assumptions"]["purchasePrice"], 1899.0)
+        self.assertEqual(candidate["assumptions"]["currency"], "CNY")
+        # Fees are never guessed, so the profit model stays incomplete.
+        profit = calculate_profit(candidate["assumptions"])
+        self.assertFalse(profit["complete"])
+        self.assertIn("referralRate", profit["missingFields"])
+        self.assertEqual(len(candidate["evidence"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

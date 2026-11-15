@@ -45,6 +45,19 @@ PROFIT_FIELDS = (
     "otherCostJpy",
 )
 
+# Same-currency scenarios: a domestic price gap between two platforms of one
+# market, where purchase and sale are both quoted in the same currency.
+SAME_CURRENCY_FIELDS = (
+    "sellingPrice",
+    "purchasePrice",
+    "currency",
+    "referralRate",
+    "adCost",
+    "fulfillmentCost",
+    "otherCost",
+    "returnReserveRate",
+)
+
 
 def confidence_for(candidate: dict) -> dict:
     sources: dict[str, set[str]] = {}
@@ -94,6 +107,8 @@ def calculate_scores(candidate: dict) -> dict:
 
 
 def calculate_profit(assumptions: dict) -> dict:
+    if assumptions.get("sellingPrice") not in (None, ""):
+        return calculate_same_currency_profit(assumptions)
     missing = [key for key in PROFIT_FIELDS if assumptions.get(key) in (None, "")]
     if missing:
         return {"complete": False, "missingFields": missing}
@@ -132,6 +147,73 @@ def calculate_profit(assumptions: dict) -> dict:
         "contributionMargin": round(contribution / price, 4),
         "breakEvenAdCost": round(max(0, remaining_for_ads), 2),
     }
+
+
+def calculate_same_currency_profit(assumptions: dict) -> dict:
+    """Profit inside one currency, used for domestic platform price gaps."""
+    missing = [
+        key
+        for key in (
+            "sellingPrice",
+            "purchasePrice",
+            "currency",
+            "referralRate",
+            "adCost",
+            "fulfillmentCost",
+            "returnReserveRate",
+        )
+        if assumptions.get(key) in (None, "")
+    ]
+    if missing:
+        return {"complete": False, "missingFields": missing, "model": "same_currency"}
+    currency = str(assumptions.get("currency", "")).upper()
+    if currency not in {"CNY", "JPY"}:
+        return {"complete": False, "missingFields": ["currency"], "model": "same_currency"}
+
+    price = _finite(assumptions["sellingPrice"], "售价")
+    purchase = _finite(assumptions["purchasePrice"], "采购价")
+    if price <= 0 or purchase < 0:
+        return {"complete": False, "missingFields": ["sellingPrice", "purchasePrice"], "model": "same_currency"}
+
+    referral_rate = _rate(assumptions.get("referralRate", 0))
+    return_rate = _rate(assumptions.get("returnReserveRate", 0))
+    costs = {
+        "采购成本": purchase,
+        "平台佣金": price * referral_rate,
+        "广告": _finite(assumptions.get("adCost", 0) or 0, "广告成本"),
+        "履约/运费": _finite(assumptions.get("fulfillmentCost", 0) or 0, "履约费用"),
+        "退货预留": price * return_rate,
+        "其他成本": _finite(assumptions.get("otherCost", 0) or 0, "其他成本"),
+    }
+    contribution = price - sum(costs.values())
+    remaining_for_ads = price - sum(value for key, value in costs.items() if key != "广告")
+    return {
+        "complete": True,
+        "model": "same_currency",
+        "currency": currency,
+        "sellingPrice": round(price, 2),
+        "costs": {key: round(value, 2) for key, value in costs.items()},
+        "contributionProfit": round(contribution, 2),
+        "contributionMargin": round(contribution / price, 4),
+        "breakEvenAdCost": round(max(0, remaining_for_ads), 2),
+    }
+
+
+def _finite(value, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}必须是有效数字。") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label}必须是有效数字。")
+    return number
+
+
+def _rate(value) -> float:
+    number = _finite(value, "费率")
+    if number < 0 or number > 1:
+        raise ValueError("费率必须在 0 到 1 之间。")
+    return number
 
 
 def resource_fit(candidate: dict, profile: dict) -> str:

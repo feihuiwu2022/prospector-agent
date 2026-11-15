@@ -18,9 +18,10 @@ from uuid import uuid4
 from prospector.agents import build_tasks, now_iso, refresh_task_statuses
 from prospector.agent_discovery import run_agent_discovery
 from prospector.agent_competitors import run_competitor_analysis
+from prospector.agent_pricegap import build_price_gap_candidates, run_price_gap_scan
 from prospector.agent_runtime import run_task
 from prospector.connectors.registry import connector_status, platform_metadata
-from prospector.platforms import MARKETS, default_platform_for_market, sales_channels, supply_markets
+from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
     SCORE_EVIDENCE_DIMENSIONS,
@@ -231,6 +232,7 @@ class Handler(BaseHTTPRequestHandler):
                 "connectors": connector_status(),
                 "platforms": platform_metadata(),
                 "markets": MARKETS,
+                "marketGroups": market_group_catalog(),
                 "llmProvider": llm_provider_status(),
                 "webSearch": web_search_status(),
                 "discoveryStrategies": strategy_catalog(),
@@ -239,6 +241,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"id": "automatic_selection", "label": "自动选品"},
                     {"id": "manual_selection", "label": "手动选品"},
                     {"id": "competitor_analysis", "label": "手动竞品分析"},
+                    {"id": "price_gap", "label": "同品比价"},
                 ],
                 "providerStatus": "MiniMax Agent 可主动搜索公开网页并筛选商品；平台搜索摘要不等于官方 API、实时销量或可购报价。",
             })
@@ -424,8 +427,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def start_agent_chat(self, body: dict) -> None:
         mode = str(body.get("mode", "")).strip()
-        if mode not in {"automatic_selection", "manual_selection", "competitor_analysis"}:
-            raise ValueError("请选择自动选品、手动选品或手动竞品分析模式。")
+        if mode not in {"automatic_selection", "manual_selection", "competitor_analysis", "price_gap"}:
+            raise ValueError("请选择自动选品、手动选品、手动竞品分析或同品比价模式。")
         search = web_search_status()
         if not search.get("configured"):
             self.send_json(503, {"error": search["message"]})
@@ -514,7 +517,17 @@ class Handler(BaseHTTPRequestHandler):
             STORE.update(update)
 
         try:
-            if mode == "competitor_analysis":
+            if mode == "price_gap":
+                result = run_price_gap_scan(
+                    prompt,
+                    profile.get("market", "中国"),
+                    profile.get("sourcingCountry", "中国"),
+                    progress=update_progress,
+                )
+                candidates = build_price_gap_candidates(prompt, result, profile)
+                final_status = result.get("status", "needs_manual_validation")
+                summary = result.get("summary", "同品比价完成。")
+            elif mode == "competitor_analysis":
                 result = run_competitor_analysis(
                     prompt,
                     profile.get("market", "日本"),
@@ -560,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
                     "searchCount": result.get("searchCount", 0),
                     "sourceCount": result.get("sourceCount", 0),
                     "model": result.get("model"),
-                    "report": result if mode == "competitor_analysis" else None,
+                    "report": result if mode in {"competitor_analysis", "price_gap"} else None,
                     "completedAt": result.get("completedAt", result.get("generatedAt", utc_now())),
                     "updatedAt": utc_now(),
                 })
@@ -926,8 +939,13 @@ class Handler(BaseHTTPRequestHandler):
                 return None
             for key, value in body.items():
                 if key in allowed:
-                    if key == "assumptions" and not isinstance(value, dict):
-                        raise ValueError("利润假设必须是对象。")
+                    if key == "assumptions":
+                        if not isinstance(value, dict):
+                            raise ValueError("利润假设必须是对象。")
+                        # Merge, so the same-currency and the cross-border
+                        # profit models can be filled independently.
+                        candidate["assumptions"] = {**(candidate.get("assumptions") or {}), **value}
+                        continue
                     if key == "status" and value not in {"researching", "ready_for_test", "paused", "archived"}:
                         raise ValueError("研究状态无效。")
                     candidate[key] = value

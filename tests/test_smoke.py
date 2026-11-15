@@ -110,6 +110,10 @@ class ServerSmokeTest(unittest.TestCase):
     def test_markets_drive_sales_and_supply_channels(self) -> None:
         data = json.loads(_get(f"{self.base}/api/bootstrap")[2])
         self.assertEqual(data["markets"], ["日本", "中国", "海外"])
+        self.assertEqual(
+            data["marketGroups"],
+            [{"group": "国内", "markets": ["中国"]}, {"group": "国际", "markets": ["日本", "海外"]}],
+        )
         platforms = data["platforms"]
         japan = [item["name"] for item in platforms if "sales" in item["roles"] and item.get("sales_market") == "日本"]
         self.assertIn("Amazon.co.jp", japan)
@@ -133,6 +137,11 @@ class ServerSmokeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         profile = json.loads(_get(f"{self.base}/api/bootstrap")[2])["profile"]
         self.assertEqual(profile["sourcingPlatforms"], ["1688", "jd"])
+
+    def test_price_gap_mode_is_offered(self) -> None:
+        data = json.loads(_get(f"{self.base}/api/bootstrap")[2])
+        modes = {item["id"] for item in data["modes"]}
+        self.assertIn("price_gap", modes)
 
     def test_static_assets_are_served(self) -> None:
         for path, needle in (("/", "app-content"), ("/styles.css", ".app"), ("/app.js", "renderHome")):

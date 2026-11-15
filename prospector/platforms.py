@@ -142,6 +142,7 @@ PLATFORMS = {
         "id": "xianyu",
         "name": "闲鱼（个人二手）",
         "roles": ["sales"],
+        "second_hand": True,
         "region": "国内",
         "access": "web_search",
         "capabilities": ["public_listing_mentions", "second_hand_price_context"],
@@ -224,6 +225,7 @@ PLATFORMS = {
         "id": "mercari_jp",
         "name": "Mercari Japan",
         "roles": ["sales", "sourcing"],
+        "second_hand": True,
         "region": "海外",
         "access": "web_search",
         "capabilities": ["public_listing_mentions", "second_hand_price_context"],
@@ -270,6 +272,13 @@ MARKET_LABELS = {
 # Markets the agent can sell into.  The order is the order shown in the UI.
 MARKETS = ["日本", "中国", "海外"]
 
+# Markets are grouped into domestic and international scopes: an operator may
+# source from one country and sell into another, or look for gaps between
+# platforms inside the same market.
+MARKET_GROUPS = {"国内": ["中国"], "国际": ["日本", "海外"]}
+
+MARKET_CURRENCY = {"中国": "CNY", "日本": "JPY", "海外": "JPY"}
+
 
 def platform_catalog() -> list[dict]:
     """Public metadata for every registered platform."""
@@ -279,6 +288,8 @@ def platform_catalog() -> list[dict]:
             roleLabel=" / ".join(ROLE_LABELS.get(role, role) for role in item["roles"]),
             salesMarketLabel=MARKET_LABELS.get(item.get("sales_market", ""), ""),
             supplyMarketLabel=MARKET_LABELS.get(item.get("supply_market", ""), ""),
+            marketGroup=market_group(item.get("sales_market") or item.get("supply_market", "")),
+            secondHand=bool(item.get("second_hand", False)),
         )
         for item in PLATFORMS.values()
     ]
@@ -318,6 +329,27 @@ def supply_markets() -> list[str]:
         if market and "sourcing" in item["roles"] and market not in seen:
             seen.append(market)
     return seen
+
+
+def market_group(market: str) -> str:
+    """Domestic or international scope of a market."""
+    for group, members in MARKET_GROUPS.items():
+        if market in members:
+            return group
+    return "国际"
+
+
+def market_currency(market: str) -> str:
+    """Currency the market's storefronts quote in."""
+    return MARKET_CURRENCY.get(market, "JPY")
+
+
+def market_group_catalog() -> list[dict]:
+    """Markets grouped for the UI (国内 first, then 国际)."""
+    return [
+        {"group": group, "markets": list(members)}
+        for group, members in MARKET_GROUPS.items()
+    ]
 
 
 def default_platform_for_market(market: str) -> str:
