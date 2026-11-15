@@ -330,6 +330,91 @@ def _rate(value) -> float:
     return number
 
 
+PILOT_FIELDS = ("windowDays", "spend", "clicks", "orders", "refunds", "revenue", "netProfit")
+
+DEFAULT_PILOT_THRESHOLDS = {
+    "minOrders": 30,
+    "maxRefundRate": 0.05,
+    "minNetMargin": 0.1,
+}
+
+
+def evaluate_pilot(pilot: dict, thresholds: dict | None = None) -> dict:
+    """Judge a real small-batch test against the operator's thresholds.
+
+    The numbers come from the operator's own order and advertising data; the
+    verdict is a comparison against thresholds, never a forecast.
+    """
+    limits = {**DEFAULT_PILOT_THRESHOLDS, **(thresholds or {})}
+    missing = [key for key in PILOT_FIELDS if (pilot or {}).get(key) in (None, "")]
+    if missing:
+        return {"complete": False, "missingFields": missing, "verdict": "待补数据"}
+
+    def number(key: str) -> float:
+        try:
+            return float(pilot[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} 必须是有效数字。") from exc
+
+    window_days = number("windowDays")
+    spend = number("spend")
+    clicks = number("clicks")
+    orders = number("orders")
+    refunds = number("refunds")
+    revenue = number("revenue")
+    net_profit = number("netProfit")
+    if window_days <= 0 or clicks < 0 or orders < 0 or refunds < 0:
+        return {"complete": False, "missingFields": ["windowDays", "clicks", "orders", "refunds"], "verdict": "待补数据"}
+
+    conversion_rate = orders / clicks if clicks else None
+    refund_rate = refunds / orders if orders else None
+    net_margin = net_profit / revenue if revenue else None
+    ad_cost_per_order = spend / orders if orders else None
+
+    findings = []
+    if orders < float(limits.get("minOrders", 0)):
+        findings.append(f"订单量 {orders:g} 低于门槛 {limits.get('minOrders')}，样本不足，暂不判断。")
+    if refund_rate is not None and refund_rate > float(limits.get("maxRefundRate", 1)):
+        findings.append(f"退款率 {refund_rate * 100:.1f}% 高于门槛 {float(limits.get('maxRefundRate', 0)) * 100:.1f}%，先解决质量问题。")
+    if net_margin is not None and net_margin < float(limits.get("minNetMargin", 0)):
+        findings.append(f"净利率 {net_margin * 100:.1f}% 低于门槛 {float(limits.get('minNetMargin', 0)) * 100:.1f}%，成本结构不成立。")
+
+    if orders < float(limits.get("minOrders", 0)):
+        verdict = "待补数据"
+        recommendation = "继续测"
+    elif refund_rate is not None and refund_rate > float(limits.get("maxRefundRate", 1)):
+        verdict = "质量不达标"
+        recommendation = "停止"
+    elif net_margin is not None and net_margin < float(limits.get("minNetMargin", 0)):
+        verdict = "成本不成立"
+        recommendation = "调整"
+    else:
+        verdict = "达标"
+        recommendation = "继续"
+
+    return {
+        "complete": True,
+        "verdict": verdict,
+        "recommendation": recommendation,
+        "findings": findings,
+        "metrics": {
+            "windowDays": window_days,
+            "spend": spend,
+            "clicks": clicks,
+            "orders": orders,
+            "refunds": refunds,
+            "revenue": revenue,
+            "netProfit": net_profit,
+            "conversionRate": round(conversion_rate, 4) if conversion_rate is not None else None,
+            "refundRate": round(refund_rate, 4) if refund_rate is not None else None,
+            "netMargin": round(net_margin, 4) if net_margin is not None else None,
+            "adCostPerOrder": round(ad_cost_per_order, 2) if ad_cost_per_order is not None else None,
+        },
+        "thresholds": limits,
+        "note": "结论只基于你录入的真实订单与投放数据；门槛由你设定。",
+    }
+
+
 def resource_fit(candidate: dict, profile: dict) -> str:
     """Return a separate advisory; deliberately excluded from score records."""
     budget = profile.get("budgetCny")

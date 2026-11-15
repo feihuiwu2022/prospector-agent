@@ -31,6 +31,7 @@ from prospector.connectors.registry import connector_status, platform_metadata
 from prospector.platforms import MARKETS, default_platform_for_market, market_group_catalog, sales_channels, supply_markets
 from prospector.domain import (
     EVIDENCE_DIMENSION_LABELS,
+    evaluate_pilot,
     SCORE_EVIDENCE_DIMENSIONS,
     SCORE_LABELS,
     calculate_batch_plan,
@@ -91,6 +92,8 @@ def candidate_view(candidate: dict, profile: dict) -> dict:
     result["confidence"] = confidence_for(result)
     result["profit"] = calculate_profit(result.get("assumptions", {}))
     result["batchPlan"] = calculate_batch_plan(result.get("assumptions", {}), result["profit"])
+    result["pilot"] = result.get("pilot") or {}
+    result["pilotReview"] = evaluate_pilot(result["pilot"], profile.get("pilotThresholds"))
     result["resourceFit"] = resource_fit(result, profile)
     return result
 
@@ -1141,7 +1144,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             self.send_json(404, {"error": "没有找到这个接口。"})
             return
-        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist"}
+        allowed = {"name", "category", "hypothesis", "status", "market", "platform", "fulfillment", "assumptions", "purchaseChecklist", "pilot"}
 
         def update_candidate(data):
             candidate = find_candidate(data, match.group(1))
@@ -1158,13 +1161,21 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if key == "status" and value not in {"researching", "ready_for_test", "paused", "archived"}:
                         raise ValueError("研究状态无效。")
+                    if key == "pilot":
+                        if not isinstance(value, dict):
+                            raise ValueError("小测数据必须是对象。")
+                        candidate["pilot"] = {**(candidate.get("pilot") or {}), **value}
+                        thresholds = (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds")
+                        advance_candidate_workflow(candidate, thresholds)
+                        continue
                     if key == "purchaseChecklist":
                         if not isinstance(value, list):
                             raise ValueError("采购清单必须是列表。")
                         candidate["purchaseChecklist"] = merge_purchase_checklist(
                             candidate.get("purchaseChecklist", []), value
                         )
-                        advance_candidate_workflow(candidate)
+                        thresholds = (data.get("profile") or DEFAULT_PROFILE).get("pilotThresholds")
+                        advance_candidate_workflow(candidate, thresholds)
                         continue
                     candidate[key] = value
             candidate["updatedAt"] = utc_now()

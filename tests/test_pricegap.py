@@ -357,6 +357,56 @@ class PriceGapScanTest(unittest.TestCase):
         comfortable = resource_fit({**candidate, "assumptions": {**candidate["assumptions"], "batchQty": 10}}, profile)
         self.assertIn("预算可覆盖首批", comfortable)
 
+    def test_pilot_verdict_follows_the_operator_thresholds(self) -> None:
+        from prospector.domain import evaluate_pilot
+
+        thresholds = {"minOrders": 30, "maxRefundRate": 0.05, "minNetMargin": 0.1}
+        incomplete = evaluate_pilot({"orders": 10}, thresholds)
+        self.assertFalse(incomplete["complete"])
+        self.assertEqual(incomplete["verdict"], "待补数据")
+
+        passing = evaluate_pilot({
+            "windowDays": 14, "spend": 3000, "clicks": 3000, "orders": 40,
+            "refunds": 1, "revenue": 12000, "netProfit": 2000,
+        }, thresholds)
+        self.assertTrue(passing["complete"])
+        self.assertEqual(passing["verdict"], "达标")
+        self.assertEqual(passing["recommendation"], "继续")
+
+        refund_heavy = evaluate_pilot({
+            "windowDays": 14, "spend": 3000, "clicks": 3000, "orders": 40,
+            "refunds": 6, "revenue": 12000, "netProfit": 2000,
+        }, thresholds)
+        self.assertEqual(refund_heavy["verdict"], "质量不达标")
+        self.assertEqual(refund_heavy["recommendation"], "停止")
+
+        thin = evaluate_pilot({
+            "windowDays": 14, "spend": 300, "clicks": 300, "orders": 5,
+            "refunds": 0, "revenue": 1500, "netProfit": 100,
+        }, thresholds)
+        self.assertEqual(thin["verdict"], "待补数据")
+        self.assertEqual(thin["recommendation"], "继续测")
+
+    def test_pilot_data_moves_the_workflow_stages(self) -> None:
+        from prospector.agent_pricegap import advance_candidate_workflow
+
+        candidate = {
+            "assumptions": {},
+            "purchaseChecklist": [],
+            "pilot": {
+                "windowDays": 14, "spend": 3000, "clicks": 3000, "orders": 40,
+                "refunds": 1, "revenue": 12000, "netProfit": 2000,
+            },
+            "workflowStages": [
+                {"id": "pilot", "number": 5, "title": "小批量测试", "status": "partial", "note": ""},
+                {"id": "scale", "number": 6, "title": "扩大经营", "status": "blocked", "note": ""},
+            ],
+        }
+        advance_candidate_workflow(candidate, {"minOrders": 30, "maxRefundRate": 0.05, "minNetMargin": 0.1})
+        stages = {stage["id"]: stage for stage in candidate["workflowStages"]}
+        self.assertEqual(stages["pilot"]["status"], "completed")
+        self.assertEqual(stages["scale"]["status"], "pending")
+
     def test_unified_profit_model_requires_fees_and_fx(self) -> None:
         from prospector.domain import calculate_profit
 

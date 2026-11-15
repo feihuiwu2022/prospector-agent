@@ -577,6 +577,29 @@ function renderPriceGapContext(candidate) {
   </section>`;
 }
 
+function renderPilotPanel(candidate) {
+  const pilot = candidate.pilot || {};
+  const review = candidate.pilotReview || {};
+  const metrics = review.metrics || {};
+  const verdictLabel = { "达标": "达标", "质量不达标": "质量不达标", "成本不成立": "成本不成立", "待补数据": "待补数据" }[review.verdict || ""] || "待补数据";
+  const field = (name, label, unit, step = "0.01") => `<div class="field"><label for="pilot-${name}">${esc(label)} <span style="font-weight:400;color:#9ca59e">(${esc(unit)})</span></label><input id="pilot-${name}" name="${name}" type="number" min="0" step="${step}" value="${pilot[name] == null ? "" : esc(pilot[name])}" /></div>`;
+  const findings = (review.findings || []).map((item) => `<li>${esc(item)}</li>`).join("");
+  return `<section class="panel"><div class="panel-head"><h3>小测记录</h3><small>录入真实订单与投放数据，系统只按你设的门槛判断</small></div>
+    <form id="pilot-form" class="form-grid">
+      ${field("windowDays", "测试窗口", "天", "1")}
+      ${field("spend", "投放花费", "销售币种")}
+      ${field("clicks", "点击/访问", "次", "1")}
+      ${field("orders", "订单数", "单", "1")}
+      ${field("refunds", "退款单数", "单", "1")}
+      ${field("revenue", "销售额", "销售币种")}
+      ${field("netProfit", "净利润", "销售币种")}
+      <div class="field full"><div class="form-actions"><button type="submit" class="button-secondary">保存并判断</button></div></div>
+    </form>
+    <div class="profit-result" style="margin-top:12px"><div class="profit-metric"><span>结论</span><b class="${review.verdict === "达标" ? "" : "negative"}">${esc(verdictLabel)}</b></div><div class="profit-metric"><span>建议</span><b>${esc(review.recommendation || "待补数据")}</b></div><div class="profit-metric"><span>退款率</span><b>${metrics.refundRate == null ? "—" : `${(metrics.refundRate * 100).toFixed(1)}%`}</b></div><div class="profit-metric"><span>净利率</span><b>${metrics.netMargin == null ? "—" : `${(metrics.netMargin * 100).toFixed(1)}%`}</b></div></div>
+    ${findings ? `<ul style="color:#9aa39b;font-size:9px;line-height:1.7">${findings}</ul>` : ""}
+  </section>`;
+}
+
 function renderSellerComparison(candidate) {
   const pairing = candidate.priceGap || {};
   if (!pairing.product) return "";
@@ -652,6 +675,7 @@ function renderOverview(candidate) {
         ${candidate.priceGap ? renderPriceGapContext(candidate) : ""}
         ${candidate.priceScenarios?.length ? renderCandidateScenarios(candidate) : ""}
         ${renderSellerComparison(candidate)}
+        ${renderPilotPanel(candidate)}
         ${candidate.purchaseChecklist?.length ? renderPurchaseChecklist(candidate) : ""}
         ${workflow ? `<section class="panel"><div class="panel-head"><h3>六步自动研究进度</h3><small>缺少授权或真实交易数据时明确停在待核验</small></div><div class="candidate-workflow">${workflow}</div></section>` : ""}
         ${research ? `<section class="panel"><div class="panel-head"><h3>市场与供应链初筛</h3><small>搜索摘要 · 待人工核对页面</small></div><div class="agent-assessments-detail"><div><b>${esc(candidate.market || "日本")}市场</b><p>${esc(research.marketAssessment)}</p></div><div><b>${esc(candidate.sourcingCountry || "中国")}货源</b><p>${esc(research.sourcingAssessment)}</p></div><div><b>利润准备度</b><p>${research.profitReadiness === "blocked" ? "当前搜索结果不足以验证商品价格与完整费用，因此不计算利润。" : "部分价格线索仍需核实。"}</p></div>${research.gaps?.length ? `<div><b>尚待补齐</b><ul>${research.gaps.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div></section>` : ""}
@@ -818,6 +842,7 @@ function renderProfile() {
   const sourceCountry = profile.sourcingCountry || "中国";
   const sourcingOptions = sourcingPlatforms(sourceCountry);
   const gapCosts = (profile.priceGapAssumptions && typeof profile.priceGapAssumptions === "object") ? profile.priceGapAssumptions : { referralRate: "", adCost: "", fulfillmentCost: "", returnReserveRate: "" };
+  const pilotLimits = (profile.pilotThresholds && typeof profile.pilotThresholds === "object") ? profile.pilotThresholds : { minOrders: 30, maxRefundRate: 0.05, minNetMargin: 0.1 };
   const marketChannels = salesPlatforms(market);
   const platformOptions = marketChannels.length
     ? marketChannels.map((item) => `<option value="${esc(item.name)}" ${item.name === profile.platform ? "selected" : ""}>${esc(item.name)}</option>`).join("")
@@ -838,6 +863,13 @@ function renderProfile() {
       <div class="field"><label>风险偏好</label><select name="riskTolerance"><option value="" ${!profile.riskTolerance ? "selected" : ""}>未设置</option><option ${profile.riskTolerance === "低风险" ? "selected" : ""}>低风险</option><option ${profile.riskTolerance === "中等风险" ? "selected" : ""}>中等风险</option><option ${profile.riskTolerance === "较高风险" ? "selected" : ""}>较高风险</option></select></div>
       <div class="field"><label>库存承受度</label><select name="inventoryTolerance"><option value="" ${!profile.inventoryTolerance ? "selected" : ""}>未设置</option><option ${profile.inventoryTolerance === "不囤货" ? "selected" : ""}>不囤货</option><option ${profile.inventoryTolerance === "允许少量囤货" ? "selected" : ""}>允许少量囤货</option><option ${profile.inventoryTolerance === "可批量备货" ? "selected" : ""}>可批量备货</option></select></div>
       <div class="field"><label>供应链能力</label><input name="sourcingCapabilities" value="${esc(profile.sourcingCapabilities || "")}" placeholder="工厂、验货、定制等" /></div>
+      <div class="field full"><label>小测门槛（判断真实订单是否达标）</label>
+        <div class="form-grid">
+          <div class="field"><label>最少订单量</label><input name="pilotMinOrders" type="number" min="0" value="${esc(pilotLimits.minOrders ?? "")}" /></div>
+          <div class="field"><label>最高退款率（%）</label><input name="pilotMaxRefundRate" type="number" min="0" step="0.1" value="${esc(pilotLimits.maxRefundRate === "" || pilotLimits.maxRefundRate === undefined ? "" : Number(pilotLimits.maxRefundRate) * 100)}" /></div>
+          <div class="field"><label>最低净利率（%）</label><input name="pilotMinNetMargin" type="number" min="0" step="0.1" value="${esc(pilotLimits.minNetMargin === "" || pilotLimits.minNetMargin === undefined ? "" : Number(pilotLimits.minNetMargin) * 100)}" /></div>
+        </div>
+      </div>
       <div class="field full"><label class="check-option" style="display:inline-flex;gap:7px;align-items:flex-start"><input type="checkbox" name="avoidRejected" ${profile.avoidRejected ? "checked" : ""} /><span><b>把淘汰理由回喂给 Agent</b><small>开启后，下一轮自动选品会带上你过去淘汰商品时写下的原因，作为“不要再来这类”的提示；理由原文不改写。</small></span></label></div>
       <div class="field full"><label>比价假设（把毛差价换算成单件贡献利润）</label>
         <div class="form-grid">
@@ -1297,10 +1329,31 @@ document.addEventListener("submit", async (event) => {
       await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ assumptions }) });
       await refresh(); state.view = "detail"; state.tab = "profit"; render(); toast("利润假设已更新。"); return;
     }
+    if (form.id === "pilot-form") {
+      const pilot = {};
+      for (const key of ["windowDays", "spend", "clicks", "orders", "refunds", "revenue", "netProfit"]) {
+        const raw = String(data.get(key) || "").trim();
+        if (raw !== "") pilot[key] = Number(raw);
+      }
+      await api(`/api/candidates/${encodeURIComponent(state.selectedId)}`, { method: "PATCH", body: JSON.stringify({ pilot }) });
+      await refresh();
+      state.view = "detail";
+      render();
+      toast("小测数据已保存，结论按你设的门槛判定。");
+      return;
+    }
     if (form.id === "profile-form") {
       const profile = Object.fromEntries(data.entries());
       profile.budgetCny = profile.budgetCny === "" ? null : Number(profile.budgetCny);
       profile.avoidRejected = data.get("avoidRejected") === "on";
+      const pilotThresholds = {};
+      const minOrders = String(data.get("pilotMinOrders") || "").trim();
+      const maxRefund = String(data.get("pilotMaxRefundRate") || "").trim();
+      const minMargin = String(data.get("pilotMinNetMargin") || "").trim();
+      pilotThresholds.minOrders = minOrders === "" ? "" : Number(minOrders);
+      pilotThresholds.maxRefundRate = maxRefund === "" ? "" : Number(maxRefund) / 100;
+      pilotThresholds.minNetMargin = minMargin === "" ? "" : Number(minMargin) / 100;
+      profile.pilotThresholds = pilotThresholds;
       profile.sourcingPlatforms = data.getAll("sourcingPlatforms").map(String);
       const gapAssumptions = {};
       const referral = String(data.get("priceGapReferralRate") || "").trim();

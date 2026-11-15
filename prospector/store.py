@@ -21,6 +21,12 @@ DEFAULT_PROFILE = {
     # When enabled, the operator's rejection reasons are fed back to the
     # agent as "do not propose this again" hints.
     "avoidRejected": False,
+    # Thresholds the operator sets for judging a real small-batch test.
+    "pilotThresholds": {
+        "minOrders": 30,
+        "maxRefundRate": 0.05,
+        "minNetMargin": 0.1,
+    },
     # Cost assumptions used to turn a visible price gap into a contribution
     # estimate.  Empty values mean "not decided yet", never zero.
     # ``byPlatform`` holds per-platform overrides (platform id -> fees).

@@ -798,19 +798,22 @@ def merge_purchase_checklist(existing: list, updates: list) -> list:
     return merged
 
 
-def advance_candidate_workflow(candidate: dict) -> dict:
+def advance_candidate_workflow(candidate: dict, thresholds: dict | None = None) -> dict:
     """Move the six stages forward when the operator finished the to-dos.
 
     The sourcing stage only completes when every purchase to-do is confirmed
     by a human; the economics stage only completes when the profit model has
-    every input filled in.
+    every input filled in; the pilot stage only completes when real order
+    data was recorded, and the scale stage stays blocked until the pilot
+    passed the thresholds.
     """
-    from prospector.domain import calculate_profit  # local import avoids a cycle
+    from prospector.domain import calculate_profit, evaluate_pilot  # local import avoids a cycle
 
     stages = candidate.get("workflowStages") or []
     checklist = candidate.get("purchaseChecklist") or []
     open_items = [item for item in checklist if item.get("id") != "price_evidence" and not item.get("done")]
     profit = calculate_profit(candidate.get("assumptions", {}))
+    pilot = evaluate_pilot(candidate.get("pilot") or {}, thresholds)
     for stage in stages:
         if stage.get("id") == "sourcing":
             if checklist and not open_items:
@@ -826,6 +829,20 @@ def advance_candidate_workflow(candidate: dict) -> dict:
             else:
                 stage["status"] = "partial"
                 stage["note"] = "费用或汇率未填齐，利润显示为待核验，不给出确定数字。"
+        elif stage.get("id") == "pilot":
+            if pilot.get("complete"):
+                stage["status"] = "completed"
+                stage["note"] = f"小测数据已录入（{pilot['verdict']}）：{('；'.join(pilot['findings'])) or '各项指标在门槛之内'}。"
+            else:
+                stage["status"] = "partial"
+                stage["note"] = "还没有真实订单数据；缺 " + "、".join(pilot.get("missingFields", [])) + "，小测结论保持待补。"
+        elif stage.get("id") == "scale":
+            if pilot.get("complete") and pilot.get("verdict") == "达标":
+                stage["status"] = "pending"
+                stage["note"] = "小测达标，可以开始规划扩量；备货与预算仍需你确认。"
+            else:
+                stage["status"] = "blocked"
+                stage["note"] = "等待小测达标后再谈扩量；当前不生成备货建议。"
     candidate["workflowStages"] = stages
     return candidate
 
